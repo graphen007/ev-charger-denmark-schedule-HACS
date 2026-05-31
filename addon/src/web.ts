@@ -1,0 +1,166 @@
+import express, { type Request, type Response, type NextFunction } from "express";
+import http from "http";
+import { WebSocketServer, type WebSocket as Ws } from "ws";
+import path from "path";
+import type { Controller } from "./controller.js";
+import type { HaClient } from "./haClient.js";
+import {
+  loadSettings, saveSettings, getCarSettings, saveCarSettings,
+  loadSessions, type GlobalSettings,
+} from "./settings.js";
+import { fetchForecast } from "./priceClient.js";
+import type { CarConfig } from "./planner.js";
+
+export function createWebServer(controller: Controller, ha: HaClient) {
+  const app = express();
+  app.use(express.json());
+
+  // Serve UI
+  const uiDir = path.resolve(__dirname, "../ui");
+  app.use(express.static(uiDir));
+
+  // ---- Status ----
+  app.get("/api/status", (_req, res) => {
+    res.json(controller.getAllStatus());
+  });
+
+  // ---- HA entities proxy (for entity dropdowns in Settings) ----
+  app.get("/api/ha/entities", (_req, res) => {
+    const states = ha.getAllStates().map((s) => ({
+      entity_id:    s.entity_id,
+      state:        s.state,
+      friendly_name: s.attributes.friendly_name ?? s.entity_id,
+      domain:       s.entity_id.split(".")[0],
+    }));
+    res.json(states);
+  });
+
+  // ---- Global settings ----
+  app.get("/api/settings", (_req, res) => res.json(loadSettings()));
+
+  // ---- Cars CRUD ----
+  app.get("/api/settings/cars", (_req, res) => res.json(loadSettings().cars));
+
+  app.post("/api/settings/cars", (req, res) => {
+    const s = loadSettings();
+    const car: CarConfig = req.body as CarConfig;
+    if (!car.id || !car.name) { res.status(400).json({ error: "id and name required" }); return; }
+    if (s.cars.find((c) => c.id === car.id)) { res.status(409).json({ error: "Car id already exists" }); return; }
+    s.cars.push(car);
+    saveSettings(s);
+    res.json({ ok: true, car });
+  });
+
+  app.put("/api/settings/cars/:carId", (req, res) => {
+    const s = loadSettings();
+    const idx = s.cars.findIndex((c) => c.id === req.params.carId);
+    if (idx < 0) { res.status(404).json({ error: "Car not found" }); return; }
+    s.cars[idx] = { ...s.cars[idx], ...(req.body as Partial<CarConfig>), id: req.params.carId };
+    saveSettings(s);
+    res.json({ ok: true, car: s.cars[idx] });
+  });
+
+  app.delete("/api/settings/cars/:carId", (req, res) => {
+    const s = loadSettings();
+    s.cars = s.cars.filter((c) => c.id !== req.params.carId);
+    delete s.carSettings[req.params.carId];
+    saveSettings(s);
+    res.json({ ok: true });
+  });
+
+  // ---- Tariffs ----
+  app.get("/api/settings/tariffs", (_req, res) => res.json(loadSettings().tariffs));
+  app.post("/api/settings/tariffs", (req, res) => {
+    const s = loadSettings();
+    s.tariffs = { ...s.tariffs, ...(req.body as Partial<GlobalSettings["tariffs"]>) };
+    saveSettings(s);
+    res.json({ ok: true, tariffs: s.tariffs });
+  });
+
+  // ---- Notifications ----
+  app.get("/api/settings/notifications", (_req, res) => res.json(loadSettings().notifications));
+  app.post("/api/settings/notifications", (req, res) => {
+    const s = loadSettings();
+    s.notifications = { ...s.notifications, ...(req.body as Partial<GlobalSettings["notifications"]>) };
+    saveSettings(s);
+    res.json({ ok: true });
+  });
+
+  // ---- Per-car charge settings ----
+  app.get("/api/car/:carId/settings", (req, res) => res.json(getCarSettings(req.params.carId)));
+  app.post("/api/car/:carId/settings", (req, res) => {
+    saveCarSettings(req.params.carId, req.body);
+    controller.getAllStatus(); // trigger plan rebuild
+    res.json({ ok: true });
+  });
+
+  // ---- Plan ----
+  app.get("/api/plan/:carId", (req, res) => {
+    const state = controller.getCarState(req.params.carId);
+    res.json(state?.plan ?? []);
+  });
+
+  // ---- Execute ----
+  app.post("/api/execute/:carId", async (req, res) => {
+    const result = await controller.executeNow(req.params.carId);
+    res.json({ ok: true, result });
+  });
+
+  // ---- Prices ----
+  app.get("/api/prices", (_req, res) => res.json(controller.getPriceSlots()));
+
+  // ---- Forecast ----
+  app.get("/api/forecast", async (_req, res) => {
+    const { area } = loadSettings();
+    try {
+      const forecast = await fetchForecast(area);
+      res.json(forecast);
+    } catch (e) {
+      res.status(500).json({ error: (e as Error).message });
+    }
+  });
+
+  // ---- History ----
+  app.get("/api/history", (_req, res) => res.json(loadSessions()));
+
+  // ---- Force refresh ----
+  app.post("/api/refresh", async (_req, res) => {
+    await controller.refreshPrices();
+    res.json({ ok: true });
+  });
+
+  // Fallback: serve index.html for all non-API routes (SPA routing)
+  app.get("*", (_req, res) => {
+    res.sendFile(path.join(uiDir, "index.html"));
+  });
+
+  // Error handler
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  app.use((err: Error, _req: Request, res: Response, _next: NextFunction) => {
+    console.error("[Web]", err.message);
+    res.status(500).json({ error: err.message });
+  });
+
+  // ---- WebSocket server (real-time push) ----
+  const server = http.createServer(app);
+  const wss = new WebSocketServer({ server, path: "/ws" });
+  const clients = new Set<Ws>();
+
+  wss.on("connection", (ws) => {
+    clients.add(ws);
+    // Send current state immediately on connect
+    ws.send(JSON.stringify({ event: "status", data: controller.getAllStatus() }));
+    ws.on("close", () => clients.delete(ws));
+  });
+
+  const broadcast = (event: string, data: unknown) => {
+    const msg = JSON.stringify({ event, data });
+    for (const ws of clients) {
+      if (ws.readyState === ws.OPEN) ws.send(msg);
+    }
+  };
+
+  controller.setBroadcast(broadcast);
+
+  return { server, broadcast };
+}

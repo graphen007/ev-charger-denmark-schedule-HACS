@@ -1,0 +1,25 @@
+name: "EV Smart Charging Denmark"
+description: "Smart EV charging scheduler with Nord Pool prices, Danish tariffs, solar surplus, session history and departure planning. Cars configured in the UI — just install and go."
+version: "2.0.0"
+slug: "ev_smart_charging_dk"
+init: false
+arch:
+  - aarch64
+  - amd64
+  - armhf
+  - armv7
+  - i386
+options:
+  area: "DK1"
+schema:
+  area: "list(DK1|DK2)"
+homeassistant: "2024.1.0"
+map:
+  - data
+ports:
+  8099/tcp: null
+ingress: true
+ingress_port: 8099
+ingress_stream: false
+panel_icon: "mdi:car-electric"
+panel_title: "EV Charging"
