@@ -110,15 +110,14 @@ class EvSmartChargingCard extends LitElement {
 
   async _loadAll() {
     if (!this.hass || !this._selectedCarId) return;
+    if (this._loading) return; // prevent concurrent loads
     this._loading = true;
     this._error = null;
     try {
-      // Load settings
-      this._settings = await loadCarSettings(this.hass, this._selectedCarId);
-      // Fetch prices
+      this._settings = loadCarSettings(this._selectedCarId);
       await this._fetchAndPlan();
     } catch (e) {
-      this._error = `Fejl ved indlæsning: ${e.message}`;
+      this._error = `Error loading: ${e.message}`;
     } finally {
       this._loading = false;
     }
@@ -218,7 +217,7 @@ class EvSmartChargingCard extends LitElement {
 
   async _onChargeLimitChange(value) {
     this._settings = { ...this._settings, charge_limit: value };
-    await saveCarSettings(this.hass, this._selectedCarId, this._settings);
+    saveCarSettings(this._selectedCarId, this._settings);
     const entity = this._selectedCar?.charge_limit_entity;
     if (entity) {
       await this.hass.callService("number", "set_value", { entity_id: entity, value });
@@ -227,22 +226,31 @@ class EvSmartChargingCard extends LitElement {
 
   async _onCarChange(e) {
     this._selectedCarId = e.target.value;
-    this._settings = null;
+    // Load settings immediately from localStorage (no async needed)
+    this._settings = loadCarSettings(this._selectedCarId);
     this._plan = [];
     this._summary = null;
-    await this._loadAll();
+    // Then fetch prices for the new car
+    this._loading = true;
+    try {
+      await this._fetchAndPlan();
+    } catch (e2) {
+      this._error = `Error loading: ${e2.message}`;
+    } finally {
+      this._loading = false;
+    }
   }
 
   async _onModeChange(mode) {
     this._settings = { ...this._settings, mode };
     this._rebuildPlan();
-    await saveCarSettings(this.hass, this._selectedCarId, this._settings);
+    saveCarSettings(this._selectedCarId, this._settings);
   }
 
   async _onSettingChange(key, value) {
     this._settings = { ...this._settings, [key]: value };
     this._rebuildPlan();
-    await saveCarSettings(this.hass, this._selectedCarId, this._settings);
+    saveCarSettings(this._selectedCarId, this._settings);
   }
 
   async _onRefresh() {
@@ -278,14 +286,15 @@ class EvSmartChargingCard extends LitElement {
         ${this._loading ? html`<div class="loading-spinner">Fetching prices…</div>` : html`
           ${this._renderCarSelector()}
           ${this._renderStatusPanel()}
+          ${this._renderPriceStrip()}
           ${this._renderNextCharge()}
           ${this._renderModeSelector()}
           ${this._renderSettings()}
           ${this._renderEstimate()}
+          ${this._renderSmartTip()}
           ${this._renderExecuteButton()}
-          ${this._renderPriceChart()}
-          ${this._renderTimeline()}
-          ${this._renderPriceWidget()}
+          ${this._renderCombinedChart()}
+          ${this._renderTableToggle()}
         `}
       </ha-card>
     `;
@@ -472,60 +481,62 @@ class EvSmartChargingCard extends LitElement {
   _renderTimeline() {
     if (this._plan.length === 0) return nothing;
 
-    // Group into hours; keep day boundary info
-    const hourGroups = [];
-    for (let i = 0; i < this._plan.length; i += 4) {
-      const group = this._plan.slice(i, i + 4);
-      const charging = group.some((s) => s.charging);
-      const isPast = group.every((s) => s.isPast);
-      const avgEp = group.reduce((s, x) => s + x.ep, 0) / group.length;
-      hourGroups.push({ start: group[0].start, localDate: group[0].localDate, charging, isPast, avgEp });
-    }
-
-    const allEp = hourGroups.map((g) => g.avgEp);
+    const slots = this._plan; // use raw 15-min slots
+    const allEp = slots.map((s) => s.ep);
     const minEp = Math.min(...allEp);
     const maxEp = Math.max(...allEp);
     const now = new Date();
     const todayStr = now.toDateString();
 
-    // Split into today / tomorrow groups for labels
-    const todayGroups = hourGroups.filter((g) => g.localDate.toDateString() === todayStr);
-    const tomorrowGroups = hourGroups.filter((g) => g.localDate.toDateString() !== todayStr);
+    const todaySlots = slots.filter((s) => s.localDate.toDateString() === todayStr);
+    const tomorrowSlots = slots.filter((s) => s.localDate.toDateString() !== todayStr);
 
-    const renderBar = (groups) => groups.map((g) => {
-      const relEp = maxEp > minEp ? (g.avgEp - minEp) / (maxEp - minEp) : 0;
-      const isNow = g.localDate <= now && now < new Date(g.localDate.getTime() + 3600000);
+    const renderBar = (slotList) => slotList.map((s) => {
+      const relEp = maxEp > minEp ? (s.ep - minEp) / (maxEp - minEp) : 0;
+      const isNow = s.localDate <= now && now < new Date(s.localDate.getTime() + 15 * 60 * 1000);
       return html`<div
-        class="timeline-slot ${g.isPast ? "past" : ""} ${g.charging ? "charging" : ""} ${g.charging && relEp < 0.33 ? "cheap" : ""} ${g.charging && relEp > 0.66 ? "peak" : ""}"
-        title="${this._formatTime(g.start)}: ${this._fmt(g.avgEp)} kr/kWh${g.charging ? " – LADER" : ""}${g.isPast ? " (forbi)" : ""}"
+        class="timeline-slot ${s.isPast ? "past" : ""} ${s.charging ? "charging" : ""} ${s.charging && relEp < 0.33 ? "cheap" : ""} ${s.charging && relEp > 0.66 ? "peak" : ""}"
+        title="${this._formatTime(s.start)}: ${this._fmt(s.ep)} DKK/kWh${s.charging ? " – charging" : ""}${s.isPast ? " (past)" : ""}"
         style="${isNow ? "outline: 2px solid var(--primary-text-color);" : ""}"
       ></div>`;
     });
 
+    // Hour labels: one per 4 slots
+    const renderLabels = (slotList) => {
+      const hours = [];
+      for (let i = 0; i < slotList.length; i += 4) {
+        hours.push(slotList[i].localDate.getHours().toString().padStart(2, "0"));
+      }
+      const step = Math.ceil(hours.length / 6); // show ~6 labels max
+      return html`<div class="timeline-labels">
+        ${hours.filter((_, i) => i % step === 0 || i === hours.length - 1).map((h) => html`<span>${h}</span>`)}
+      </div>`;
+    };
+
     return html`
       <div class="timeline-wrap">
         <div class="section-label">Charge Plan</div>
-        ${todayGroups.length ? html`
+        ${todaySlots.length ? html`
           <div class="timeline-day-label">${now.toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" })} (today)</div>
-          <div class="timeline-bar">${renderBar(todayGroups)}</div>
-          <div class="timeline-labels"><span>00</span><span>06</span><span>12</span><span>18</span><span>24</span></div>
+          <div class="timeline-bar">${renderBar(todaySlots)}</div>
+          ${renderLabels(todaySlots)}
         ` : nothing}
-        ${tomorrowGroups.length ? html`
-          <div class="timeline-day-label">${tomorrowGroups[0].localDate.toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" })} (tomorrow)</div>
-          <div class="timeline-bar">${renderBar(tomorrowGroups)}</div>
-          <div class="timeline-labels"><span>00</span><span>06</span><span>12</span><span>18</span><span>24</span></div>
+        ${tomorrowSlots.length ? html`
+          <div class="timeline-day-label">${tomorrowSlots[0].localDate.toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" })} (tomorrow)</div>
+          <div class="timeline-bar">${renderBar(tomorrowSlots)}</div>
+          ${renderLabels(tomorrowSlots)}
         ` : html`<div class="estimate-sub" style="margin:4px 16px;opacity:.6">Tomorrow's prices available ~13:00</div>`}
       </div>
 
       <button class="table-toggle" @click=${() => { this._showTable = !this._showTable; }}>
-      ${this._showTable ? "Hide hourly plan" : "Show hourly plan"}
+        ${this._showTable ? "Hide 15-min plan" : "Show 15-min plan"}
       </button>
 
-      ${this._showTable ? this._renderTable(hourGroups, now) : nothing}
+      ${this._showTable ? this._renderTable(slots, now) : nothing}
     `;
   }
 
-  _renderTable(hourGroups, now) {
+  _renderTable(slots, now) {
     let lastDay = null;
     return html`
       <table class="price-table">
@@ -533,16 +544,16 @@ class EvSmartChargingCard extends LitElement {
           <tr><th>Time</th><th>DKK/kWh</th><th>Status</th></tr>
         </thead>
         <tbody>
-          ${hourGroups.map((g) => {
-            const dayStr = g.localDate.toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" });
+          ${slots.map((s) => {
+            const dayStr = s.localDate.toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" });
             const dayHeader = dayStr !== lastDay ? ((lastDay = dayStr), html`<tr class="day-header-row"><td colspan="3">${dayStr}</td></tr>`) : nothing;
-            const isNow = g.localDate <= now && now < new Date(g.localDate.getTime() + 3600000);
+            const isNow = s.localDate <= now && now < new Date(s.localDate.getTime() + 15 * 60 * 1000);
             return html`
               ${dayHeader}
-              <tr class="${g.isPast ? "past-row" : ""} ${g.charging ? "charging-row" : ""} ${isNow ? "now-row" : ""}">
-                <td>${this._formatTime(g.start)}${isNow ? " ◀" : ""}</td>
-                <td>${this._fmt(g.avgEp)}</td>
-                <td>${g.isPast ? html`<span style="opacity:.4">–</span>` : g.charging ? html`<span class="charge-dot"></span>Charging` : "–"}</td>
+              <tr class="${s.isPast ? "past-row" : ""} ${s.charging ? "charging-row" : ""} ${isNow ? "now-row" : ""}">
+                <td>${this._formatTime(s.start)}${isNow ? " ◀" : ""}</td>
+                <td>${this._fmt(s.ep)}</td>
+                <td>${s.isPast ? html`<span style="opacity:.4">–</span>` : s.charging ? html`<span class="charge-dot"></span>Charging` : "–"}</td>
               </tr>
             `;
           })}
@@ -577,75 +588,55 @@ class EvSmartChargingCard extends LitElement {
     `;
   }
 
-  _renderPriceChart() {
-    if (this._plan.length === 0) return nothing;
-
+  _renderPriceStrip() {
+    if (!this._plan.length) return nothing;
     const now = new Date();
-    const hourly = [];
-    for (let i = 0; i < this._plan.length; i += 4) {
-      const g = this._plan.slice(i, i + 4);
-      const avgEp = g.reduce((s, x) => s + x.ep, 0) / g.length;
-      hourly.push({
-        start: g[0].start,
-        localDate: g[0].localDate,
-        avgEp,
-        charging: g.some((s) => s.charging),
-        isPast: g.every((s) => s.isPast),
-        isNow: g[0].localDate <= now && now < new Date(g[0].localDate.getTime() + 3600000),
-      });
-    }
-
-    const eps = hourly.map((h) => h.avgEp);
-    const minEp = Math.min(...eps);
-    const maxEp = Math.max(...eps);
-    const range = maxEp - minEp || 0.01;
-    const todayStr = now.toDateString();
-
-    const renderSection = (bars, label) => html`
-      <div class="chart-section">
-        <div class="chart-section-label">${label}</div>
-        <div class="price-chart">
-          ${bars.map((h) => {
-            const pct = Math.round(((h.avgEp - minEp) / range) * 75 + 10);
-            return html`<div class="price-bar-col" title="${this._formatTime(h.start)}: ${this._fmt(h.avgEp)} kr/kWh${h.charging ? " – LADER" : ""}">
-              <div class="price-bar-inner ${h.charging ? "charging" : ""} ${h.isPast ? "past" : ""} ${h.isNow ? "now" : ""}"
-                style="height:${pct}%"></div>
-            </div>`;
-          })}
-        </div>
-        <div class="chart-axis">
-          <span>${this._fmt(minEp)}</span>
-          <span>${this._fmt(maxEp)}</span>
-        </div>
-      </div>
-    `;
-
-    const todayBars = hourly.filter((h) => h.localDate.toDateString() === todayStr);
-    const tomorrowBars = hourly.filter((h) => h.localDate.toDateString() !== todayStr);
+    const todaySlots = this._plan.filter((s) => s.localDate.toDateString() === now.toDateString());
+    const currentSlot = todaySlots.find((s) => now >= s.localDate && now < new Date(s.localDate.getTime() + 15 * 60 * 1000));
+    const lowest = todaySlots.length ? Math.min(...todaySlots.map((s) => s.ep)) : null;
+    const highest = todaySlots.length ? Math.max(...todaySlots.map((s) => s.ep)) : null;
+    const current = currentSlot?.ep ?? null;
+    const pct = current != null && lowest != null && highest != null && highest > lowest
+      ? Math.round(((current - lowest) / (highest - lowest)) * 100) : null;
+    const priceClass = pct != null ? (pct < 33 ? "price-cheap" : pct < 66 ? "price-mid" : "price-peak") : "";
 
     return html`
-      <div class="price-chart-wrap">
-        <div class="section-label">Price overview (DKK/kWh incl. tariffs)</div>
-        ${renderSection(todayBars, now.toLocaleDateString("da-DK", { weekday: "short", day: "numeric", month: "short" }))}
-        ${tomorrowBars.length ? renderSection(tomorrowBars,
-            tomorrowBars[0].localDate.toLocaleDateString("da-DK", { weekday: "short", day: "numeric", month: "short" }))
-          : nothing}
+      <div class="price-strip">
+        <div class="price-strip-item ${priceClass}">
+          <div class="ps-label">Now</div>
+          <div class="ps-value">${current != null ? this._fmt(current) : "–"}</div>
+          <div class="ps-unit">DKK/kWh</div>
+        </div>
+        <div class="price-strip-divider"></div>
+        <div class="price-strip-item price-cheap">
+          <div class="ps-label">Lowest today</div>
+          <div class="ps-value">${lowest != null ? this._fmt(lowest) : "–"}</div>
+          <div class="ps-unit">DKK/kWh</div>
+        </div>
+        <div class="price-strip-divider"></div>
+        <div class="price-strip-item price-peak">
+          <div class="ps-label">Highest today</div>
+          <div class="ps-value">${highest != null ? this._fmt(highest) : "–"}</div>
+          <div class="ps-unit">DKK/kWh</div>
+        </div>
+        ${pct != null ? html`
+        <div class="price-strip-divider"></div>
+        <div class="price-strip-item">
+          <div class="ps-label">Price rank</div>
+          <div class="ps-value ${priceClass}">${pct}%</div>
+          <div class="ps-unit">of today's range</div>
+        </div>` : nothing}
       </div>
+      <div class="price-chip-note">All prices incl. N1 Nettarif C + Energinet tariffs</div>
     `;
   }
 
   _renderNextCharge() {
     if (!this._plan.length || this._settings?.mode === "Off") return nothing;
     const now = new Date();
+    const currentSlot = this._plan.find((s) => now >= s.localDate && now < new Date(s.localDate.getTime() + 15 * 60 * 1000));
 
-    const currentSlot = this._plan.find((s) => {
-      const start = s.localDate;
-      return now >= start && now < new Date(start.getTime() + 15 * 60 * 1000);
-    });
-    const isChargingNow = currentSlot?.charging;
-
-    if (isChargingNow) {
-      // Find when charging stops
+    if (currentSlot?.charging) {
       const stopSlot = this._plan.find((s) => !s.isPast && !s.charging && s.localDate > now);
       const stopLabel = stopSlot ? this._formatTime(stopSlot.start) : "–";
       return html`<div class="next-charge charging-now">⚡ Charging now — stops ~${stopLabel}</div>`;
@@ -661,39 +652,239 @@ class EvSmartChargingCard extends LitElement {
     const isTomorrow = nextSlot.localDate.toDateString() !== now.toDateString();
 
     return html`<div class="next-charge">
-    ⏱ Next charge ${isTomorrow ? "tomorrow " : ""}at ${this._formatTime(nextSlot.start)} — in ${label} (${this._fmt(nextSlot.ep)} DKK/kWh)
+      ⏱ Next charge ${isTomorrow ? "tomorrow " : ""}at ${this._formatTime(nextSlot.start)} — in ${label} (${this._fmt(nextSlot.ep)} DKK/kWh)
     </div>`;
   }
 
-  _renderPriceWidget() {
-    // Derive all prices from plan (effective price = spot + all tariffs incl. VAT)
+  _renderSmartTip() {
+    if (!this._plan.length || !this._summary) return nothing;
     const now = new Date();
-    const todayStr = now.toDateString();
-    const todaySlots = this._plan.filter((s) => s.localDate.toDateString() === todayStr);
+    const mode = this._settings?.mode;
+    const todaySlots = this._plan.filter((s) => !s.isPast && s.localDate.toDateString() === now.toDateString());
+    const currentSlot = this._plan.find((s) => now >= s.localDate && now < new Date(s.localDate.getTime() + 15 * 60 * 1000));
+    const sortedEp = [...todaySlots].sort((a, b) => a.ep - b.ep);
+    const cheapest3 = sortedEp.slice(0, 3);
+    const p25 = sortedEp[Math.floor(sortedEp.length * 0.25)]?.ep;
 
-    const currentSlot = todaySlots.find((s) => now >= s.localDate && now < new Date(s.localDate.getTime() + 15 * 60 * 1000));
-    const currentPrice = currentSlot?.ep ?? null;
-    const lowest = todaySlots.length ? Math.min(...todaySlots.map((s) => s.ep)) : null;
-    const highest = todaySlots.length ? Math.max(...todaySlots.map((s) => s.ep)) : null;
+    // Tip: current slot is cheap but not charging
+    if (currentSlot && !currentSlot.charging && currentSlot.ep <= (p25 ?? Infinity) && mode !== "Charge Now") {
+      return html`<div class="smart-tip">💡 Current price (${this._fmt(currentSlot.ep)} DKK/kWh) is in the cheapest 25% today — consider switching to Charge Now or adding more hours.</div>`;
+    }
+    // Tip: very cheap window coming up soon
+    const upcomingCheap = cheapest3.find((s) => !s.charging && s.localDate > now && (s.localDate - now) < 3 * 3600000);
+    if (upcomingCheap && mode === "Off") {
+      return html`<div class="smart-tip">💡 Cheap price window at ${this._formatTime(upcomingCheap.start)} (${this._fmt(upcomingCheap.ep)} DKK/kWh) — enable a charging mode to take advantage.</div>`;
+    }
+    // Tip: cheapest hours not all covered
+    if (mode === "Cheapest Hours" && this._summary.final_soc < (this._settings?.charge_limit ?? 100) - 5) {
+      const uncheduledCheap = cheapest3.filter((s) => !s.charging);
+      if (uncheduledCheap.length) {
+        return html`<div class="smart-tip">💡 Battery will reach ${Math.round(this._summary.final_soc)}% — increase Cheapest Hours to charge more during the cheap window (${this._fmt(uncheduledCheap[0].ep)} DKK/kWh at ${this._formatTime(uncheduledCheap[0].start)}).</div>`;
+      }
+    }
+    return nothing;
+  }
+
+  _renderCombinedChart() {
+    if (!this._plan.length) return nothing;
+
+    const slots = this._plan;
+    const now = new Date();
+    const car = this._selectedCar;
+    const battery_kwh = car?.battery_kwh ?? 71.2;
+    const charge_kw = car?.charge_kw ?? 9.5;
+    const charge_limit = this._settings?.charge_limit ?? 100;
+    const current_soc = this._currentSoC ?? this._settings?.manual_soc ?? 20;
+
+    // SVG viewport
+    const VW = 1000, VH = 230;
+    const ML = 46, MR = 46, MT = 12, MB = 30;
+    const CW = VW - ML - MR, CH = VH - MT - MB;
+
+    // Price scale (leave 10% headroom)
+    const allEp = slots.map((s) => s.ep);
+    const minEp = Math.min(...allEp);
+    const maxEp = Math.max(...allEp);
+    const epPad = (maxEp - minEp) * 0.1 || 0.1;
+    const epMin = minEp - epPad, epMax = maxEp + epPad;
+
+    const startMs = slots[0].localDate.getTime();
+    const endMs = slots[slots.length - 1].localDate.getTime() + 15 * 60 * 1000;
+    const totalMs = endMs - startMs;
+    const barW = CW / slots.length;
+
+    const toX = (ms) => ML + ((ms - startMs) / totalMs) * CW;
+    const epToY = (ep) => MT + CH - ((ep - epMin) / (epMax - epMin)) * CH;
+    const socToY = (soc) => MT + CH - (Math.min(100, Math.max(0, soc)) / 100) * CH;
+
+    // SoC projection from now
+    let projSoc = current_soc;
+    const socPts = [];
+    for (let i = 0; i < slots.length; i++) {
+      const s = slots[i];
+      if (!s.isPast) {
+        if (socPts.length === 0) socPts.push([toX(now.getTime()), socToY(projSoc)]);
+        socPts.push([ML + (i + 0.5) * barW, socToY(projSoc)]);
+        if (s.charging) projSoc = Math.min(charge_limit, projSoc + (charge_kw * 0.25 / battery_kwh) * 100);
+      }
+    }
+    if (socPts.length) socPts.push([ML + slots.length * barW, socToY(projSoc)]);
+    const socPath = socPts.map(([x, y], i) => `${i === 0 ? "M" : "L"}${x.toFixed(1)},${y.toFixed(1)}`).join(" ");
+
+    // Day separators
+    const daySeps = [];
+    let lastDay = null;
+    slots.forEach((s, i) => {
+      const d = s.localDate.toDateString();
+      if (d !== lastDay) {
+        if (lastDay) daySeps.push({ x: ML + i * barW, label: s.localDate.toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" }) });
+        lastDay = d;
+      }
+    });
+
+    // Hour labels every 3h
+    const xLabels = [];
+    slots.forEach((s, i) => {
+      if (s.localDate.getMinutes() === 0 && s.localDate.getHours() % 3 === 0) {
+        xLabels.push({ x: ML + i * barW, label: s.localDate.getHours().toString().padStart(2, "0") + ":00" });
+      }
+    });
+
+    // Price Y-axis ticks
+    const priceTicks = [minEp, (minEp + maxEp) / 2, maxEp];
+    const nowX = toX(now.getTime());
+    const inRange = now.getTime() >= startMs && now.getTime() <= endMs;
 
     return html`
-      <div class="price-row">
-        <div class="price-chip">
-          <div class="price-chip-label">Now</div>
-          <div class="price-chip-value">${currentPrice != null ? this._fmt(currentPrice) : "–"} DKK</div>
-        </div>
-        <div class="price-chip">
-          <div class="price-chip-label">Lowest today</div>
-          <div class="price-chip-value">${lowest != null ? this._fmt(lowest) : "–"} DKK</div>
-        </div>
-        <div class="price-chip">
-          <div class="price-chip-label">Highest today</div>
-          <div class="price-chip-value">${highest != null ? this._fmt(highest) : "–"} DKK</div>
+      <div class="combined-chart-wrap">
+        <div class="section-label">Price & Charge Plan</div>
+        <svg viewBox="0 0 ${VW} ${VH}" class="combined-svg" xmlns="http://www.w3.org/2000/svg">
+
+          <!-- Grid lines -->
+          ${priceTicks.map((ep) => html`<line
+            x1="${ML}" y1="${epToY(ep).toFixed(1)}"
+            x2="${ML + CW}" y2="${epToY(ep).toFixed(1)}"
+            stroke="currentColor" stroke-width="0.5" stroke-dasharray="4,4" opacity="0.15"/>`)}
+
+          <!-- SoC grid lines -->
+          ${[25, 50, 75, 100].map((v) => html`<line
+            x1="${ML}" y1="${socToY(v).toFixed(1)}"
+            x2="${ML + CW}" y2="${socToY(v).toFixed(1)}"
+            stroke="#2196f3" stroke-width="0.3" stroke-dasharray="2,6" opacity="0.2"/>`)}
+
+          <!-- Price bars -->
+          ${slots.map((s, i) => {
+            const x = ML + i * barW;
+            const h = Math.max(2, ((s.ep - epMin) / (epMax - epMin)) * CH);
+            const y = MT + CH - h;
+            const isNow = s.localDate <= now && now < new Date(s.localDate.getTime() + 15 * 60 * 1000);
+            const fill = s.charging
+              ? (s.ep < (minEp + (maxEp - minEp) * 0.33) ? "#4caf50" : s.ep > (minEp + (maxEp - minEp) * 0.66) ? "#ff9800" : "#66bb6a")
+              : "currentColor";
+            return html`<rect
+              x="${x.toFixed(1)}" y="${y.toFixed(1)}"
+              width="${Math.max(0.5, barW - 0.8).toFixed(1)}" height="${h.toFixed(1)}"
+              fill="${fill}" opacity="${s.isPast ? 0.2 : s.charging ? 0.95 : 0.35}"
+              rx="1">
+              <title>${this._formatTime(s.start)}: ${this._fmt(s.ep)} DKK/kWh${s.charging ? " ⚡ charging" : ""}</title>
+            </rect>
+            ${isNow ? html`<rect x="${x.toFixed(1)}" y="${MT}" width="${barW.toFixed(1)}" height="${CH}"
+              fill="none" stroke="white" stroke-width="1.5" opacity="0.6" rx="1"/>` : nothing}`;
+          })}
+
+          <!-- Day separators -->
+          ${daySeps.map((d) => html`
+            <line x1="${d.x.toFixed(1)}" y1="${MT}" x2="${d.x.toFixed(1)}" y2="${MT + CH}"
+              stroke="currentColor" stroke-width="1" stroke-dasharray="3,3" opacity="0.3"/>
+            <text x="${(d.x + 5).toFixed(1)}" y="${(MT + 14).toFixed(1)}"
+              font-size="16" fill="currentColor" opacity="0.5">${d.label}</text>`)}
+
+          <!-- Current time line -->
+          ${inRange ? html`
+            <line x1="${nowX.toFixed(1)}" y1="${MT}" x2="${nowX.toFixed(1)}" y2="${MT + CH + 4}"
+              stroke="white" stroke-width="2" opacity="0.8"/>` : nothing}
+
+          <!-- Charge limit dashed line -->
+          <line x1="${ML}" y1="${socToY(charge_limit).toFixed(1)}"
+            x2="${ML + CW}" y2="${socToY(charge_limit).toFixed(1)}"
+            stroke="#2196f3" stroke-width="1.5" stroke-dasharray="6,3" opacity="0.5"/>
+          <text x="${(ML + CW + 3).toFixed(1)}" y="${(socToY(charge_limit) + 5).toFixed(1)}"
+            font-size="15" fill="#2196f3" opacity="0.8">${charge_limit}%</text>
+
+          <!-- SoC projection line -->
+          ${socPath ? html`<path d="${socPath}" fill="none" stroke="#2196f3" stroke-width="3"
+            stroke-linejoin="round" stroke-linecap="round" opacity="0.85"/>` : nothing}
+
+          <!-- Current SoC dot -->
+          ${inRange && socPts.length ? html`<circle
+            cx="${socPts[0][0].toFixed(1)}" cy="${socPts[0][1].toFixed(1)}"
+            r="5" fill="#2196f3" opacity="0.9"/>` : nothing}
+
+          <!-- Left Y-axis: price -->
+          ${priceTicks.map((ep) => html`<text
+            x="${(ML - 4).toFixed(1)}" y="${(epToY(ep) + 4).toFixed(1)}"
+            font-size="16" fill="currentColor" text-anchor="end" opacity="0.6">${ep.toFixed(1)}</text>`)}
+          <text x="${(ML - 4).toFixed(1)}" y="${(MT - 2).toFixed(1)}"
+            font-size="13" fill="currentColor" text-anchor="end" opacity="0.45">DKK</text>
+
+          <!-- Right Y-axis: SoC -->
+          ${[0, 50, 100].map((v) => html`<text
+            x="${(ML + CW + 4).toFixed(1)}" y="${(socToY(v) + 4).toFixed(1)}"
+            font-size="16" fill="#2196f3" opacity="0.7">${v}%</text>`)}
+          <text x="${(ML + CW + 4).toFixed(1)}" y="${(MT - 2).toFixed(1)}"
+            font-size="13" fill="#2196f3" opacity="0.45">SoC</text>
+
+          <!-- X-axis labels -->
+          ${xLabels.map((l) => html`<text
+            x="${l.x.toFixed(1)}" y="${(MT + CH + 20).toFixed(1)}"
+            font-size="16" fill="currentColor" text-anchor="middle" opacity="0.5">${l.label}</text>`)}
+        </svg>
+
+        <div class="chart-legend">
+          <span class="legend-item"><span class="legend-swatch" style="background:#4caf50"></span>Charging (cheap)</span>
+          <span class="legend-item"><span class="legend-swatch" style="background:#ff9800"></span>Charging (peak)</span>
+          <span class="legend-item"><span class="legend-swatch" style="background:currentColor;opacity:.35"></span>Not charging</span>
+          <span class="legend-item"><span class="legend-line-swatch"></span>SoC projection</span>
         </div>
       </div>
-      <div class="price-chip-note">All prices incl. N1 tariffs + Energinet (excl. VAT on tariffs already included)</div>
+
+      <button class="table-toggle" @click=${() => { this._showTable = !this._showTable; }}>
+        ${this._showTable ? "Hide 15-min schedule" : "Show 15-min schedule"}
+      </button>
+      ${this._showTable ? this._renderTable() : nothing}
     `;
   }
+
+  _renderTableToggle() { return nothing; } // handled inside _renderCombinedChart
+
+  _renderTable() {
+    const now = new Date();
+    let lastDay = null;
+    return html`
+      <table class="price-table">
+        <thead><tr><th>Time</th><th>DKK/kWh</th><th>Status</th></tr></thead>
+        <tbody>
+          ${this._plan.map((s) => {
+            const dayStr = s.localDate.toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" });
+            const dayHeader = dayStr !== lastDay
+              ? ((lastDay = dayStr), html`<tr class="day-header-row"><td colspan="3">${dayStr}</td></tr>`)
+              : nothing;
+            const isNow = s.localDate <= now && now < new Date(s.localDate.getTime() + 15 * 60 * 1000);
+            return html`${dayHeader}
+              <tr class="${s.isPast ? "past-row" : ""} ${s.charging ? "charging-row" : ""} ${isNow ? "now-row" : ""}">
+                <td>${this._formatTime(s.start)}${isNow ? " ◀" : ""}</td>
+                <td>${this._fmt(s.ep)}</td>
+                <td>${s.isPast ? html`<span style="opacity:.4">–</span>` : s.charging ? html`<span class="charge-dot"></span>Charging` : "–"}</td>
+              </tr>`;
+          })}
+        </tbody>
+      </table>`;
+  }
+
+  // Legacy stubs — replaced by combined chart
+  _renderPriceChart() { return nothing; }
+  _renderTimeline() { return nothing; }
+  _renderPriceWidget() { return nothing; }
 
   getCardSize() {
     return 8;

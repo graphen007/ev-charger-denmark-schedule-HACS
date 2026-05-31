@@ -436,7 +436,89 @@ export const cardStyles = css`
     color: var(--primary-text-color);
   }
 
-  /* ---- Execute button ---- */
+  /* ---- Price strip ---- */
+  .price-strip {
+    display: flex;
+    align-items: stretch;
+    background: var(--secondary-background-color);
+    border-radius: 10px;
+    margin-bottom: 4px;
+    overflow: hidden;
+  }
+
+  .price-strip-item {
+    flex: 1;
+    padding: 10px 8px;
+    text-align: center;
+  }
+
+  .price-strip-divider {
+    width: 1px;
+    background: var(--divider-color);
+    margin: 8px 0;
+  }
+
+  .ps-label { font-size: 0.68em; color: var(--secondary-text-color); margin-bottom: 2px; }
+  .ps-value { font-size: 1.1em; font-weight: 700; color: var(--primary-text-color); }
+  .ps-unit  { font-size: 0.65em; color: var(--secondary-text-color); }
+
+  .price-cheap .ps-value { color: var(--success-color, #4caf50); }
+  .price-peak  .ps-value { color: var(--error-color, #f44336); }
+  .price-mid   .ps-value { color: var(--warning-color, #ff9800); }
+
+  /* ---- Smart tip ---- */
+  .smart-tip {
+    background: color-mix(in srgb, var(--primary-color) 12%, transparent);
+    border-left: 3px solid var(--primary-color);
+    border-radius: 0 8px 8px 0;
+    padding: 8px 12px;
+    font-size: 0.82em;
+    color: var(--primary-text-color);
+    margin-bottom: 10px;
+    line-height: 1.4;
+  }
+
+  /* ---- Combined SVG chart ---- */
+  .combined-chart-wrap {
+    margin: 14px 0 4px;
+  }
+
+  .combined-svg {
+    width: 100%;
+    height: auto;
+    display: block;
+    color: var(--primary-text-color);
+    overflow: visible;
+  }
+
+  .chart-legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+    font-size: 0.72em;
+    color: var(--secondary-text-color);
+    margin-top: 6px;
+    padding: 0 4px;
+  }
+
+  .legend-item { display: flex; align-items: center; gap: 5px; }
+
+  .legend-swatch {
+    display: inline-block;
+    width: 12px;
+    height: 12px;
+    border-radius: 2px;
+    flex-shrink: 0;
+  }
+
+  .legend-line-swatch {
+    display: inline-block;
+    width: 18px;
+    height: 3px;
+    background: #2196f3;
+    border-radius: 2px;
+    flex-shrink: 0;
+  }
   .execute-wrap {
     margin: 12px 0 4px;
     text-align: center;

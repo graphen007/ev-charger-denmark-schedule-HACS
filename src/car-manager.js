@@ -1,18 +1,9 @@
 /**
- * Car settings manager — persists per-car settings to HA input_text helpers.
- * Helper name: input_text.ev_settings_{car_id}
- * State value: JSON string, max 255 chars per field stored individually.
- *
- * Settings object shape:
- * {
- *   mode: string,
- *   price_threshold: number,
- *   cheapest_hours: number,
- *   departure_time: string,  // "HH:MM"
- *   target_soc: number,
- *   manual_soc: number,
- * }
+ * Car settings manager — persists per-car settings to localStorage.
+ * Key: ev_smart_charging_{carId}
  */
+
+const STORAGE_PREFIX = "ev_smart_charging_";
 
 const DEFAULT_SETTINGS = {
   mode: "Cheapest Hours",
@@ -20,56 +11,23 @@ const DEFAULT_SETTINGS = {
   cheapest_hours: 4,
   departure_time: "07:00",
   target_soc: 80,
+  charge_limit: 100,
   manual_soc: 20,
 };
 
-/** Loads settings for a car from HA state. Returns defaults if helper doesn't exist. */
-export async function loadCarSettings(hass, carId) {
-  const entityId = `input_text.ev_settings_${carId}`;
-  const state = hass.states[entityId];
-  if (!state || !state.state || state.state === "unknown") {
-    return { ...DEFAULT_SETTINGS };
-  }
+/** Loads settings for a car from localStorage. Returns defaults if not found. */
+export function loadCarSettings(carId) {
   try {
-    return { ...DEFAULT_SETTINGS, ...JSON.parse(state.state) };
-  } catch {
-    return { ...DEFAULT_SETTINGS };
-  }
+    const raw = localStorage.getItem(`${STORAGE_PREFIX}${carId}`);
+    if (raw) return { ...DEFAULT_SETTINGS, ...JSON.parse(raw) };
+  } catch {}
+  return { ...DEFAULT_SETTINGS };
 }
 
-/** Saves settings for a car to HA. Creates the input_text helper if needed. */
-export async function saveCarSettings(hass, carId, settings) {
-  const entityId = `input_text.ev_settings_${carId}`;
-  const value = JSON.stringify(settings);
-
-  // Try to set via input_text.set_value service first (works if helper exists)
+/** Saves settings for a car to localStorage. */
+export function saveCarSettings(carId, settings) {
   try {
-    await hass.callService("input_text", "set_value", {
-      entity_id: entityId,
-      value,
-    });
-    return;
-  } catch {
-    // Helper doesn't exist — create it via REST API then set
-  }
-
-  // Create the helper via REST
-  try {
-    const resp = await fetch(`/api/states/${entityId}`, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${hass.auth.data.access_token}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        state: value,
-        attributes: {
-          friendly_name: `EV Indstillinger – ${carId}`,
-          max: 500,
-        },
-      }),
-    });
-    if (!resp.ok) throw new Error(await resp.text());
+    localStorage.setItem(`${STORAGE_PREFIX}${carId}`, JSON.stringify(settings));
   } catch (e) {
     console.error("[ev-charging] Could not save settings:", e);
   }
