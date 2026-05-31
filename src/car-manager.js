@@ -15,7 +15,7 @@
  */
 
 const DEFAULT_SETTINGS = {
-  mode: "Billigste timer",
+  mode: "Cheapest Hours",
   price_threshold: 0.50,
   cheapest_hours: 4,
   departure_time: "07:00",

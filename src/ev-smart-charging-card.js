@@ -349,7 +349,7 @@ class EvSmartChargingCard extends LitElement {
   }
 
   _renderModeSelector() {
-    const mode = this._settings?.mode ?? "Billigste timer";
+    const mode = this._settings?.mode ?? "Cheapest Hours";
     return html`
       <div class="section-label">Charging Mode</div>
       <div class="mode-grid">
