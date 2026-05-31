@@ -436,6 +436,35 @@ export const cardStyles = css`
     color: var(--primary-text-color);
   }
 
+  /* ---- Other cars status strip ---- */
+  .other-cars-strip {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    padding: 8px 16px 4px;
+  }
+  .other-car-chip {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    background: var(--secondary-background-color);
+    border: 1px solid var(--divider-color, rgba(255,255,255,.1));
+    border-radius: 20px;
+    padding: 5px 12px;
+    cursor: pointer;
+    font-size: 0.82em;
+    transition: background 0.15s;
+  }
+  .other-car-chip:hover {
+    background: var(--primary-color, #03a9f4);
+    color: white;
+  }
+  .other-car-name { font-weight: 600; }
+  .other-car-soc { opacity: .75; }
+  .other-car-mode { opacity: .65; font-style: italic; }
+  .other-car-status.oc-charging { color: #4caf50; }
+  .other-car-next { opacity: .6; font-size: .9em; }
+
   /* ---- Price strip ---- */
   .price-strip {
     display: flex;

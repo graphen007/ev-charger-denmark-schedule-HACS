@@ -1,6 +1,12 @@
 /**
- * Car settings manager — persists per-car settings to localStorage.
- * Key: ev_smart_charging_{carId}
+ * Car settings manager — cross-user, cross-device persistence.
+ *
+ * PRIMARY:   HA state machine via /api/states/ — shared across ALL users and
+ *            devices in real-time via HA's WebSocket broadcast.
+ * FALLBACK:  localStorage — survives HA restarts on the same device.
+ *
+ * Load is synchronous (reads hass.states directly, no async needed).
+ * Save is async (POSTs to HA REST, also writes localStorage immediately).
  */
 
 const STORAGE_PREFIX = "ev_smart_charging_";
@@ -15,21 +21,36 @@ const DEFAULT_SETTINGS = {
   manual_soc: 20,
 };
 
-/** Loads settings for a car from localStorage. Returns defaults if not found. */
-export function loadCarSettings(carId) {
+/** Loads settings — reads from hass.states (shared) then localStorage fallback. */
+export function loadCarSettings(hass, carId) {
+  const entityId = `input_text.ev_settings_${carId}`;
+  const raw = hass?.states[entityId]?.state;
+  if (raw && raw !== "unknown" && raw !== "unavailable") {
+    try {
+      const parsed = JSON.parse(raw);
+      try { localStorage.setItem(`${STORAGE_PREFIX}${carId}`, raw); } catch {}
+      return { ...DEFAULT_SETTINGS, ...parsed };
+    } catch {}
+  }
+  // Fallback: localStorage (persists across HA restarts)
   try {
-    const raw = localStorage.getItem(`${STORAGE_PREFIX}${carId}`);
-    if (raw) return { ...DEFAULT_SETTINGS, ...JSON.parse(raw) };
+    const local = localStorage.getItem(`${STORAGE_PREFIX}${carId}`);
+    if (local) return { ...DEFAULT_SETTINGS, ...JSON.parse(local) };
   } catch {}
   return { ...DEFAULT_SETTINGS };
 }
 
-/** Saves settings for a car to localStorage. */
-export function saveCarSettings(carId, settings) {
+/** Saves settings — writes localStorage instantly, then pushes to HA state machine. */
+export async function saveCarSettings(hass, carId, settings) {
+  const entityId = `input_text.ev_settings_${carId}`;
+  const json = JSON.stringify(settings);
+  // Instant local write
+  try { localStorage.setItem(`${STORAGE_PREFIX}${carId}`, json); } catch {}
+  // Push to HA — broadcasts to all users/devices via WebSocket
   try {
-    localStorage.setItem(`${STORAGE_PREFIX}${carId}`, JSON.stringify(settings));
+    await hass.callApi("POST", `states/${entityId}`, { state: json });
   } catch (e) {
-    console.error("[ev-charging] Could not save settings:", e);
+    console.warn("[ev-charging] Could not save to HA states:", e?.message);
   }
 }
 

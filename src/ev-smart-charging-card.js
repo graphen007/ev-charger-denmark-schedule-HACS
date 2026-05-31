@@ -52,6 +52,9 @@ class EvSmartChargingCard extends LitElement {
     this._controlInterval = null;
     this._lastAction = null;
     this._executing = false;
+    // Per-car cache: { [carId]: { settings, plan, summary } }
+    // Not reactive — view props (_settings/_plan/_summary) are the reactive triggers
+    this._carsData = {};
   }
 
   setConfig(config) {
@@ -98,24 +101,30 @@ class EvSmartChargingCard extends LitElement {
   }
 
   async updated(changedProps) {
-    // When hass becomes available for the first time, load settings + prices
-    if (changedProps.has("hass") && this.hass && !this._settings) {
+    // Load all cars when hass first becomes available
+    if (changedProps.has("hass") && this.hass && Object.keys(this._carsData).length === 0) {
       await this._loadAll();
     }
-    // When hass updates, re-run control logic (entity state changes)
-    if (changedProps.has("hass") && this.hass && this._settings && this._plan.length > 0) {
+    // Re-run control on every hass update (entity state changes)
+    if (changedProps.has("hass") && this.hass && Object.keys(this._carsData).length > 0) {
       this._runChargeControl();
     }
   }
 
   async _loadAll() {
-    if (!this.hass || !this._selectedCarId) return;
-    if (this._loading) return; // prevent concurrent loads
+    if (!this.hass) return;
+    if (this._loading) return;
     this._loading = true;
     this._error = null;
     try {
-      this._settings = loadCarSettings(this._selectedCarId);
-      await this._fetchAndPlan();
+      // Load settings for ALL cars upfront
+      for (const car of this._cars) {
+        if (!this._carsData[car.id]) this._carsData[car.id] = {};
+        this._carsData[car.id].settings = loadCarSettings(this.hass, car.id);
+      }
+      this._settings = this._carsData[this._selectedCarId]?.settings;
+      // Fetch prices once (shared across all cars — same Nord Pool area)
+      await this._fetchAndPlanAll();
     } catch (e) {
       this._error = `Error loading: ${e.message}`;
     } finally {
@@ -123,101 +132,133 @@ class EvSmartChargingCard extends LitElement {
     }
   }
 
-  async _fetchAndPlan() {
-    const car = this._selectedCar;
+  async _fetchAndPlanAll() {
     const configEntry = this.config?.nordpool_config_entry;
     const area = this.config?.area ?? "DK1";
     if (!configEntry) {
-      this._error = "Mangler nordpool_config_entry i kortets konfiguration.";
+      this._error = "Missing nordpool_config_entry in card config.";
       return;
     }
     this._slots = await fetchTodayAndTomorrowPrices(this.hass, configEntry, area);
-    this._rebuildPlan();
+    // Build a plan for every car with its own settings
+    for (const car of this._cars) {
+      this._rebuildPlanForCar(car.id);
+    }
+    this._updateViewFromSelected();
   }
 
-  _rebuildPlan() {
-    if (!this._settings || this._slots.length === 0) return;
-    const car = this._selectedCar;
+  // Keep old name as alias for refresh button
+  async _fetchAndPlan() { return this._fetchAndPlanAll(); }
+
+  /** Rebuild plan for one specific car (uses shared this._slots). */
+  _rebuildPlanForCar(carId) {
+    const car = this._cars.find((c) => c.id === carId);
+    const carData = this._carsData[carId];
+    if (!carData?.settings || !this._slots.length) return;
+    const soc = (car?.soc_entity ? getLiveSoC(this.hass, car.soc_entity) : null) ?? carData.settings.manual_soc ?? 20;
     const enrichedSettings = {
-      ...this._settings,
-      current_soc: this._currentSoC,
+      ...carData.settings,
+      current_soc: soc,
       battery_kwh: car?.battery_kwh ?? 71.2,
       charge_kw: car?.charge_kw ?? this.config?.charger_speed_kw ?? 9.5,
     };
-    this._plan = buildChargePlan(this._slots, this._settings.mode, enrichedSettings, this._tariffs);
-    this._summary = planSummary(this._plan, enrichedSettings);
+    carData.plan = buildChargePlan(this._slots, carData.settings.mode, enrichedSettings, this._tariffs);
+    carData.summary = planSummary(carData.plan, enrichedSettings);
   }
 
-  async _runChargeControl() {
-    if (!this._settings || !this._plan.length) return "No plan";
-    const car = this._selectedCar;
-    if (!car?.charging_switch) return "No charging switch configured";
+  /** Rebuild selected car's plan and sync reactive view props. */
+  _rebuildPlan() {
+    this._rebuildPlanForCar(this._selectedCarId);
+    this._updateViewFromSelected();
+  }
 
-    // Guard: don't act if car is not plugged in
+  /** Sync _settings/_plan/_summary reactive props from the selected car's cached data. */
+  _updateViewFromSelected() {
+    const d = this._carsData[this._selectedCarId];
+    this._settings = d?.settings ?? null;
+    this._plan = d?.plan ?? [];
+    this._summary = d?.summary ?? null;
+  }
+
+  /** Runs control logic for ALL cars — called on every hass update and by the interval. */
+  async _runChargeControl() {
+    const results = [];
+    for (const car of this._cars) {
+      const carData = this._carsData[car.id];
+      if (!carData?.settings || !carData?.plan?.length) continue;
+      const result = await this._runChargeControlForCar(car, carData);
+      if (result) results.push(result);
+    }
+    return results.join(" | ") || "No plans active";
+  }
+
+  /** Control charging for a single car based on its own plan. */
+  async _runChargeControlForCar(car, carData) {
+    if (!car?.charging_switch) return `${car.name}: no switch`;
+
+    // Guard: don't act if unplugged
     if (car.plug_entity) {
       const plugState = this.hass?.states[car.plug_entity]?.state;
       if (plugState !== "on") {
         const currentState = this.hass.states[car.charging_switch]?.state;
         if (currentState === "on") await setCharging(this.hass, car.charging_switch, false);
-        return "🔌 Car not connected — no action";
+        return `${car.name}: 🔌 not connected`;
       }
     }
 
     const now = new Date();
-    const mode = this._settings?.mode;
+    const mode = carData.settings?.mode;
 
-    // "Charge Now" — bypass slot logic, just turn on immediately
     if (mode === "Charge Now") {
       const currentState = this.hass.states[car.charging_switch]?.state;
       if (currentState !== "on") {
         await setCharging(this.hass, car.charging_switch, true);
-        return "▶ Charging started (Charge Now mode)";
+        return `${car.name}: ▶ started`;
       }
-      return "✓ Already charging";
+      return `${car.name}: ✓ charging`;
     }
 
-    // Find the current 15-min slot by localDate
-    const currentSlot = this._plan.find((s) => {
-      return now >= s.localDate && now < new Date(s.localDate.getTime() + 15 * 60 * 1000);
-    });
-
-    if (!currentSlot) return "No slot for current time";
+    const currentSlot = carData.plan.find((s) =>
+      now >= s.localDate && now < new Date(s.localDate.getTime() + 15 * 60 * 1000)
+    );
+    if (!currentSlot) return `${car.name}: no slot`;
 
     const shouldCharge = currentSlot.charging;
-    const currentState = this.hass.states[car.charging_switch]?.state;
-    const isCharging = currentState === "on";
-    const slotTime = this._formatTime(currentSlot.start);
-    const ep = currentSlot.ep?.toFixed(2);
+    const isCharging = this.hass.states[car.charging_switch]?.state === "on";
 
     if (shouldCharge && !isCharging) {
       await setCharging(this.hass, car.charging_switch, true);
-      return `▶ Charging started (${slotTime}, ${ep} DKK/kWh)`;
+      return `${car.name}: ▶ started (${currentSlot.ep?.toFixed(2)} kr)`;
     } else if (!shouldCharge && isCharging) {
       await setCharging(this.hass, car.charging_switch, false);
-      return `⏸ Charging stopped (${slotTime}, ${ep} DKK/kWh — too expensive)`;
-    } else if (shouldCharge && isCharging) {
-      return `✓ Already charging (${slotTime}, ${ep} DKK/kWh)`;
-    } else {
-      return `– Not charging (${slotTime}, ${ep} DKK/kWh — not scheduled)`;
+      return `${car.name}: ⏸ stopped`;
     }
+    return `${car.name}: ${isCharging ? "✓ charging" : "– not scheduled"}`;
   }
 
   async _onExecutePlan() {
     this._executing = true;
     this._lastAction = null;
     try {
-      const result = await this._runChargeControl();
+      // Execute plan for the selected car only (user-triggered action)
+      const car = this._selectedCar;
+      const carData = this._carsData[car?.id];
+      if (!carData) { this._lastAction = "No plan loaded"; return; }
+      const result = await this._runChargeControlForCar(car, carData);
       this._lastAction = result;
     } catch (e) {
-      this._lastAction = `Fejl: ${e.message}`;
+      this._lastAction = `Error: ${e.message}`;
     } finally {
       this._executing = false;
     }
   }
 
   async _onChargeLimitChange(value) {
-    this._settings = { ...this._settings, charge_limit: value };
-    saveCarSettings(this._selectedCarId, this._settings);
+    const d = this._carsData[this._selectedCarId];
+    if (!d) return;
+    d.settings = { ...d.settings, charge_limit: value };
+    this._rebuildPlan();
+    saveCarSettings(this.hass, this._selectedCarId, d.settings);
     const entity = this._selectedCar?.charge_limit_entity;
     if (entity) {
       await this.hass.callService("number", "set_value", { entity_id: entity, value });
@@ -225,32 +266,30 @@ class EvSmartChargingCard extends LitElement {
   }
 
   async _onCarChange(e) {
-    this._selectedCarId = e.target.value;
-    // Load settings immediately from localStorage (no async needed)
-    this._settings = loadCarSettings(this._selectedCarId);
-    this._plan = [];
-    this._summary = null;
-    // Then fetch prices for the new car
-    this._loading = true;
-    try {
-      await this._fetchAndPlan();
-    } catch (e2) {
-      this._error = `Error loading: ${e2.message}`;
-    } finally {
-      this._loading = false;
+    const newId = typeof e === "string" ? e : e.target.value;
+    this._selectedCarId = newId;
+    // If not yet cached (shouldn't happen after _loadAll), load it now
+    if (!this._carsData[newId]?.settings) {
+      this._carsData[newId] = { settings: loadCarSettings(this.hass, newId) };
+      this._rebuildPlanForCar(newId);
     }
+    this._updateViewFromSelected();
   }
 
   async _onModeChange(mode) {
-    this._settings = { ...this._settings, mode };
+    const d = this._carsData[this._selectedCarId];
+    if (!d) return;
+    d.settings = { ...d.settings, mode };
     this._rebuildPlan();
-    saveCarSettings(this._selectedCarId, this._settings);
+    saveCarSettings(this.hass, this._selectedCarId, d.settings);
   }
 
   async _onSettingChange(key, value) {
-    this._settings = { ...this._settings, [key]: value };
+    const d = this._carsData[this._selectedCarId];
+    if (!d) return;
+    d.settings = { ...d.settings, [key]: value };
     this._rebuildPlan();
-    saveCarSettings(this._selectedCarId, this._settings);
+    saveCarSettings(this.hass, this._selectedCarId, d.settings);
   }
 
   async _onRefresh() {
@@ -274,7 +313,35 @@ class EvSmartChargingCard extends LitElement {
     return "";
   }
 
-  // ---- Render ----
+  /** Status strip showing all OTHER cars' mode, SoC, and next charge — click to switch. */
+  _renderOtherCarsStatus() {
+    if (this._cars.length <= 1) return nothing;
+    const others = this._cars.filter((c) => c.id !== this._selectedCarId);
+    return html`
+      <div class="other-cars-strip">
+        ${others.map((car) => {
+          const d = this._carsData[car.id];
+          if (!d) return nothing;
+          const soc = (car.soc_entity ? getLiveSoC(this.hass, car.soc_entity) : null) ?? d.settings?.manual_soc ?? 20;
+          const isCharging = car.charging_switch ? this.hass?.states[car.charging_switch]?.state === "on" : false;
+          const isPlugged = car.plug_entity ? this.hass?.states[car.plug_entity]?.state === "on" : false;
+          const next = d.plan?.find((s) => !s.isPast && s.charging && s.localDate > new Date());
+          const mode = d.settings?.mode ?? "–";
+          return html`
+            <div class="other-car-chip" @click=${() => this._onCarChange(car.id)} title="Switch to ${car.name}">
+              <span class="other-car-name">${car.name}</span>
+              <span class="other-car-soc">${Math.round(soc)}%</span>
+              <span class="other-car-mode">${mode}</span>
+              <span class="other-car-status ${isCharging ? "oc-charging" : ""}">
+                ${isCharging ? "⚡" : isPlugged ? "🔌" : "–"}
+              </span>
+              ${next ? html`<span class="other-car-next">→ ${this._formatTime(next.start)}</span>` : nothing}
+            </div>
+          `;
+        })}
+      </div>
+    `;
+  }
 
   render() {
     if (!this.config) return nothing;
@@ -284,6 +351,7 @@ class EvSmartChargingCard extends LitElement {
         ${this._renderHeader()}
         ${this._error ? html`<div class="error-box">${this._error}</div>` : nothing}
         ${this._loading ? html`<div class="loading-spinner">Fetching prices…</div>` : html`
+          ${this._renderOtherCarsStatus()}
           ${this._renderCarSelector()}
           ${this._renderStatusPanel()}
           ${this._renderPriceStrip()}
