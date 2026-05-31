@@ -122,3 +122,28 @@ export function appendSession(session: ChargingSession): void {
   const trimmed = sessions.slice(-500);
   fs.writeFileSync(SESSIONS_PATH, JSON.stringify(trimmed, null, 2), "utf8");
 }
+
+// ---- Last command log ----
+
+export interface LastCommand {
+  action: "start" | "stop";
+  time: string;   // ISO
+  ep?: number;    // effective price at the time
+}
+
+const LAST_COMMANDS_PATH = path.join(DATA_DIR, "last_commands.json");
+
+export function loadLastCommands(): Record<string, LastCommand> {
+  try {
+    return JSON.parse(fs.readFileSync(LAST_COMMANDS_PATH, "utf8"));
+  } catch {
+    return {};
+  }
+}
+
+export function saveLastCommand(carId: string, cmd: LastCommand): void {
+  ensureDataDir();
+  const all = loadLastCommands();
+  all[carId] = cmd;
+  fs.writeFileSync(LAST_COMMANDS_PATH, JSON.stringify(all, null, 2), "utf8");
+}

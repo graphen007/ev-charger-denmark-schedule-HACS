@@ -3,7 +3,7 @@ import type { Notifier } from "./notifier.js";
 import type { PriceSlot } from "./priceClient.js";
 import { fetchPrices } from "./priceClient.js";
 import { buildChargePlan, planSummary, type Slot, type CarConfig } from "./planner.js";
-import { loadSettings, saveCarSettings, getCarSettings, appendSession, type ChargingSession } from "./settings.js";
+import { loadSettings, saveCarSettings, getCarSettings, appendSession, loadLastCommands, saveLastCommand, type ChargingSession } from "./settings.js";
 
 /** Is the car on a DC fast charger? (power >> home AC charge rate) */
 function isFastCharger(powerW: number, chargeKw: number): boolean {
@@ -204,6 +204,7 @@ export class Controller {
       const isCharging = this.ha.getState(car.charging_switch)?.state === "on";
       if (shouldCharge !== isCharging) {
         await this.ha.callService("switch", shouldCharge ? "turn_on" : "turn_off", { entity_id: car.charging_switch });
+        saveLastCommand(car.id, { action: shouldCharge ? "start" : "stop", time: new Date().toISOString() });
         console.log(`[Controller] ${car.name}: solar surplus ${surplus.toFixed(1)}kW — ${shouldCharge ? "started" : "paused"} charging`);
       }
       return;
@@ -213,6 +214,7 @@ export class Controller {
     if (settings.mode === "Charge Now") {
       if (this.ha.getState(car.charging_switch)?.state !== "on") {
         await this.ha.callService("switch", "turn_on", { entity_id: car.charging_switch });
+        saveLastCommand(car.id, { action: "start", time: new Date().toISOString() });
         console.log(`[Controller] ${car.name}: Charge Now — started`);
       }
       return;
@@ -222,6 +224,7 @@ export class Controller {
     if (settings.mode === "Off") {
       if (this.ha.getState(car.charging_switch)?.state === "on") {
         await this.ha.callService("switch", "turn_off", { entity_id: car.charging_switch });
+        saveLastCommand(car.id, { action: "stop", time: new Date().toISOString() });
         console.log(`[Controller] ${car.name}: Off — stopped`);
       }
       return;
@@ -247,9 +250,11 @@ export class Controller {
 
     if (shouldCharge && !isCharging) {
       await this.ha.callService("switch", "turn_on", { entity_id: car.charging_switch });
+      saveLastCommand(car.id, { action: "start", time: new Date().toISOString(), ep: currentSlot.ep });
       console.log(`[Controller] ${car.name}: started (${currentSlot.ep.toFixed(2)} DKK/kWh)`);
     } else if (!shouldCharge && isCharging) {
       await this.ha.callService("switch", "turn_off", { entity_id: car.charging_switch });
+      saveLastCommand(car.id, { action: "stop", time: new Date().toISOString(), ep: currentSlot.ep });
       console.log(`[Controller] ${car.name}: paused (${currentSlot.ep.toFixed(2)} DKK/kWh)`);
     }
   }
@@ -344,6 +349,8 @@ export class Controller {
 
   getAllStatus() {
     const { cars } = loadSettings();
+    const lastCommands = loadLastCommands();
+    const now = new Date();
     return cars.map((car) => {
       const state = this.carStates.get(car.id);
       const settings = getCarSettings(car.id);
@@ -355,6 +362,14 @@ export class Controller {
       const summary = plan.length
         ? planSummary(plan, soc, car.battery_kwh, car.charge_kw, settings.charge_limit)
         : null;
+
+      // What the plan says should be happening right now
+      const currentSlot = plan.find(
+        (s) => now >= s.localDate && now < new Date(s.localDate.getTime() + 15 * 60 * 1000),
+      );
+      const plannedAction: "charge" | "pause" | "unknown" =
+        currentSlot ? (currentSlot.charging ? "charge" : "pause") : "unknown";
+
       return {
         carId: car.id,
         carName: car.name,
@@ -366,6 +381,9 @@ export class Controller {
         mode: settings.mode,
         plan,
         summary,
+        plannedAction,
+        currentSlotEp: currentSlot?.ep ?? null,
+        lastCommand: lastCommands[car.id] ?? null,
       };
     });
   }

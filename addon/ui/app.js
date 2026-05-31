@@ -185,6 +185,25 @@ function renderCarsGrid() {
     const carConfig = state.settings?.cars?.find(c => c.id === car.carId);
     const hasRefresh = !!carConfig?.refresh_entity;
 
+    // Planned vs actual state
+    const planned = car.plannedAction;                  // "charge" | "pause" | "unknown"
+    const actual  = car.isCharging ? "charge" : "pause";
+    const mismatch = car.plugged && planned !== "unknown" && planned !== actual;
+    const plannedLabel = planned === "charge" ? "Should be charging" : planned === "pause" ? "Should be paused" : "No plan slot";
+    const actualLabel  = car.isCharging
+      ? `Charging${car.powerW > 100 ? ` (${(car.powerW/1000).toFixed(1)} kW)` : ""}${car.currentSlotEp ? ` at ${car.currentSlotEp.toFixed(2)} DKK/kWh` : ""}`
+      : "Not charging";
+    const stateRow = car.plugged && !car.isFastCharger ? `
+      <div class="car-state-row">
+        <span class="state-pill ${planned}">${plannedLabel}</span>
+        <span class="state-arrow">→</span>
+        <span class="state-pill actual ${mismatch ? "mismatch" : actual}">${actualLabel}</span>
+      </div>` : "";
+
+    // Last command
+    const lc = car.lastCommand;
+    const lcLine = lc ? `<div class="car-last-cmd">Last command: <strong>${lc.action === "start" ? "Start charging" : "Stop charging"}</strong>${lc.ep ? ` at ${lc.ep.toFixed(2)} DKK/kWh` : ""} — ${fmtAgo(lc.time)}</div>` : "";
+
     return `<div class="car-card" style="border-left:3px solid ${col.border}">
       <div class="car-card-header">
         <span class="car-name">${car.carName}</span>
@@ -194,6 +213,8 @@ function renderCarsGrid() {
       <div class="soc-value">${soc}<span class="soc-unit">%</span></div>
       <div class="soc-track"><div class="soc-fill ${fillClass}" style="width:${soc}%;background:${col.border}"></div></div>
       <div class="car-action">${actionLine}</div>
+      ${stateRow}
+      ${lcLine}
       <div class="car-meta">
         <span class="car-mode-label">${cs.mode ?? "Not set"}</span>
         ${car.summary ? `<span>+${car.summary.kwhAdded?.toFixed(1)} kWh → ${Math.round(car.summary.finalSoc)}%  ~${car.summary.totalCost?.toFixed(2)} DKK</span>` : ""}
@@ -980,6 +1001,14 @@ function renderNotifForm() {
 // ---- Utilities ----
 function fmtTime(iso) {
   return new Date(iso).toLocaleTimeString("da-DK", { hour: "2-digit", minute: "2-digit" });
+}
+
+function fmtAgo(iso) {
+  const diff = Math.round((Date.now() - new Date(iso).getTime()) / 1000);
+  if (diff < 60)  return `${diff}s ago`;
+  if (diff < 3600) return `${Math.floor(diff/60)}m ago`;
+  if (diff < 86400) return `${Math.floor(diff/3600)}h ago`;
+  return new Date(iso).toLocaleString("da-DK", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
 }
 
 async function refreshCar(carId, btn) {

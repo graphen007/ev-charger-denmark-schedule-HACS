@@ -189,6 +189,14 @@ html, body {
 .car-meta { display: flex; justify-content: space-between; font-size: 0.78rem; color: var(--gray-600); }
 .car-mode-label { font-weight: 600; color: var(--black); }
 .car-action { font-size: 0.82rem; color: var(--gray-600); margin: 4px 0 2px; min-height: 1.1em; }
+.car-state-row { display: flex; align-items: center; gap: 6px; margin: 5px 0 3px; flex-wrap: wrap; }
+.state-pill { font-size: 0.72rem; font-weight: 600; padding: 2px 8px; border-radius: 99px; border: 1px solid; }
+.state-pill.charge  { color: var(--green); border-color: var(--green); background: rgba(74,222,128,.1); }
+.state-pill.pause   { color: var(--gray-400); border-color: var(--gray-400); background: transparent; }
+.state-pill.mismatch { color: var(--amber); border-color: var(--amber); background: rgba(251,191,36,.1); }
+.state-pill.unknown { color: var(--gray-400); border-color: var(--gray-400); opacity: .6; }
+.state-arrow { color: var(--gray-400); font-size: 0.8rem; }
+.car-last-cmd { font-size: 0.72rem; color: var(--gray-400); margin: 2px 0 4px; }
 .car-estimate { font-size: 0.78rem; color: var(--gray-600); margin-top: 4px; }
 
 /* ===== Forecast bar ===== */
