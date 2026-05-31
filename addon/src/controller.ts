@@ -96,15 +96,16 @@ export class Controller {
       console.log(`[Controller] ${car.name}: DC fast charger detected (${powerW}W) — hands off`);
       return;
     }
-    console.log(`[Controller] ${car.name}: plugged in — building plan`);
+    console.log(`[Controller] ${car.name}: plugged in — resuming plan`);
     const soc = this.getSoc(car);
-    const state: CarState = {
-      plugged: true,
-      plan: [],
-      chargingSessionStart: { time: new Date(), startSoc: soc },
-    };
+    // Preserve existing plan — don't wipe it on replug
+    const existing = this.carStates.get(car.id);
+    const state: CarState = existing ?? { plugged: true, plan: [] };
+    state.plugged = true;
+    state.chargingSessionStart = { time: new Date(), startSoc: soc };
+    // Rebuild plan if none exists (e.g. first plug-in or addon restart)
+    if (state.plan.length === 0 && this.priceSlots.length > 0) this.rebuildPlan(car);
     this.carStates.set(car.id, state);
-    if (this.priceSlots.length > 0) this.rebuildPlan(car);
     this.broadcast("plug_changed", { carId: car.id, plugged: true });
     // Start controlling immediately rather than waiting up to 5 min for the tick
     await this.controlCar(car, this.carStates.get(car.id)!);
@@ -137,7 +138,7 @@ export class Controller {
         kwhAdded,
         estimatedCost: kwhAdded * avgEp,
         avgEffectivePrice: avgEp,
-        co2gPerKwh: null, // filled by price client if available
+        co2gPerKwh: null,
       };
       appendSession(session);
       if (endSoc >= (settings.charge_limit ?? 100) - 2) {
@@ -145,7 +146,13 @@ export class Controller {
       }
     }
 
-    this.carStates.set(car.id, { plugged: false, plan: [] });
+    // Keep the plan intact so it resumes automatically on replug
+    if (state) {
+      state.plugged = false;
+      state.chargingSessionStart = undefined;
+    } else {
+      this.carStates.set(car.id, { plugged: false, plan: [] });
+    }
     this.broadcast("plug_changed", { carId: car.id, plugged: false });
   }
 
