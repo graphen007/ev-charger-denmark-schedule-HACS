@@ -96,8 +96,9 @@ async function loadAll() {
   state.priceError = priceResp.error ?? null;
   state.settings   = settings;
   state.haEntities = haEntities;
+  // Settings embedded in status — no per-car fetches needed
   for (const car of (state.status || [])) {
-    state.carSettings[car.carId] = await api("GET", `/api/car/${car.carId}/settings`).catch(() => ({}));
+    if (car.settings) state.carSettings[car.carId] = car.settings;
   }
   state.selectedPlanCar = state.status?.[0]?.carId ?? null;
   renderAll();
@@ -106,8 +107,9 @@ async function loadAll() {
 
 async function loadStatus() {
   state.status = await api("GET", "/api/status");
+  // Settings are now embedded in each car's status — no per-car fetches needed
   for (const car of (state.status || [])) {
-    state.carSettings[car.carId] = await api("GET", `/api/car/${car.carId}/settings`).catch(() => ({}));
+    if (car.settings) state.carSettings[car.carId] = car.settings;
   }
   renderDashboard(); renderPlan();
 }
@@ -504,15 +506,15 @@ function peakRateApprox(startTime) {
 
 function renderPlan() {
   renderPlanCarSelect(); renderModeGrid(); renderModeSettings(); renderPlanEstimate(); renderTimeline(); renderScheduleTable();
-  loadAndRenderPreview();
+  // Preview is loaded explicitly when settings change, not on every poll
 }
 
-function renderTimeline() {
+function renderTimeline(overridePlan) {
   const canvas = document.getElementById("plan-chart");
   const section = document.getElementById("timeline-section");
   if (!canvas || !section) return;
 
-  const plan = state.status.find(c => c.carId === state.selectedPlanCar)?.plan ?? [];
+  const plan = overridePlan ?? state.status.find(c => c.carId === state.selectedPlanCar)?.plan ?? [];
   if (!plan.length) {
     section.style.display = "none";
     if (planChart) { planChart.destroy(); planChart = null; }
@@ -720,9 +722,26 @@ async function loadAndRenderPreview() {
   try {
     const { plan, settings } = await api("GET", `/api/car/${state.selectedPlanCar}/preview-plan`);
     const chargingSlots = plan.filter(s => s.charging);
-    const totalKwh = chargingSlots.length * 0.25 * ((state.settings?.cars?.find(c => c.id === state.selectedPlanCar)?.charge_kw) ?? 0);
-    const avgEp = chargingSlots.length ? chargingSlots.reduce((a, s) => a + s.ep, 0) / chargingSlots.length : 0;
-    const totalCost = chargingSlots.reduce((a, s) => a + s.ep * 0.25 * ((state.settings?.cars?.find(c => c.id === state.selectedPlanCar)?.charge_kw) ?? 0), 0);
+    const chargeKw = state.settings?.cars?.find(c => c.id === state.selectedPlanCar)?.charge_kw ?? 0;
+    const totalKwh  = chargingSlots.length * 0.25 * chargeKw;
+    const avgEp     = chargingSlots.length ? chargingSlots.reduce((a, s) => a + s.ep, 0) / chargingSlots.length : 0;
+    const totalCost = chargingSlots.reduce((a, s) => a + s.ep * 0.25 * chargeKw, 0);
+
+    // Update the summary in the plan estimate card
+    const estimateEl = document.getElementById("plan-estimate");
+    if (estimateEl) estimateEl.innerHTML = `
+      <div class="estimate-main">+${totalKwh.toFixed(1)} kWh (preview)</div>
+      <div class="estimate-cost">Estimated cost: ~${totalCost.toFixed(2)} DKK</div>
+      <div class="estimate-stats">
+        <span>Slots: ${chargingSlots.length}</span>
+        <span>Avg: ${avgEp.toFixed(2)} DKK/kWh</span>
+        <span>Mode: <strong>${settings.mode}</strong></span>
+      </div>`;
+
+    // Update the timeline chart with preview plan
+    renderTimeline(plan);
+
+    // Update preview collapsible
     document.getElementById("plan-estimate-preview").innerHTML = `
       <div class="preview-summary">
         Mode: <strong>${settings.mode}</strong> &nbsp;·&nbsp;
@@ -1074,6 +1093,7 @@ document.addEventListener("DOMContentLoaded", () => {
       document.getElementById(`view-${link.dataset.view}`).classList.add("active");
       if (link.dataset.view === "history")  renderHistory();
       if (link.dataset.view === "settings") renderSettingsView();
+      if (link.dataset.view === "plan")     loadAndRenderPreview();
     });
   });
 

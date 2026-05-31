@@ -387,6 +387,7 @@ export class Controller {
         plannedAction,
         currentSlotEp: currentSlot?.ep ?? null,
         lastCommand: lastCommands[car.id] ?? null,
+        settings,  // include full car settings so the UI doesn't need a separate fetch
       };
     });
   }
