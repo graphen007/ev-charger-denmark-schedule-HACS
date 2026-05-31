@@ -15,9 +15,13 @@ export function createWebServer(controller: Controller, ha: HaClient) {
   const app = express();
   app.use(express.json());
 
-  // Serve UI
+  // Serve UI with no-cache for index.html so updates are always picked up
   const uiDir = path.resolve(__dirname, "../ui");
-  app.use(express.static(uiDir));
+  app.use(express.static(uiDir, { etag: true, lastModified: true }));
+  app.get("/", (_req, res) => {
+    res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+    res.sendFile(path.join(uiDir, "index.html"));
+  });
 
   // ---- Status ----
   app.get("/api/status", (_req, res) => {
@@ -131,6 +135,7 @@ export function createWebServer(controller: Controller, ha: HaClient) {
 
   // Fallback: serve index.html for all non-API routes (SPA routing)
   app.get("*", (_req, res) => {
+    res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
     res.sendFile(path.join(uiDir, "index.html"));
   });
 

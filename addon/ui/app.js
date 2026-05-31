@@ -56,6 +56,7 @@ let historyChart = null;
 function connectWs() {
   const proto = location.protocol === "https:" ? "wss:" : "ws:";
   const ws = new WebSocket(`${proto}//${location.host}${BASE_URL}/ws`);
+  ws.onopen  = () => setStatus("Connected", true);
   ws.onmessage = (e) => {
     const { event, data } = JSON.parse(e.data);
     if (event === "status")         { state.status = data; renderDashboard(); renderPlan(); }
@@ -613,6 +614,9 @@ document.addEventListener("DOMContentLoaded", () => {
     });
   });
 
-  loadAll().then(() => connectWs()).catch(console.error);
+  loadAll().catch(console.error);
+  connectWs();
+  // HTTP fallback poll — keeps data fresh even if WS can't connect through Ingress
+  setInterval(() => loadStatus().catch(() => {}), 10000);
 });
 

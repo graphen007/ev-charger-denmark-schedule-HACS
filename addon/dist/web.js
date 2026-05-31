@@ -13,9 +13,13 @@ const priceClient_js_1 = require("./priceClient.js");
 function createWebServer(controller, ha) {
     const app = (0, express_1.default)();
     app.use(express_1.default.json());
-    // Serve UI
+    // Serve UI with no-cache for index.html so updates are always picked up
     const uiDir = path_1.default.resolve(__dirname, "../ui");
-    app.use(express_1.default.static(uiDir));
+    app.use(express_1.default.static(uiDir, { etag: true, lastModified: true }));
+    app.get("/", (_req, res) => {
+        res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+        res.sendFile(path_1.default.join(uiDir, "index.html"));
+    });
     // ---- Status ----
     app.get("/api/status", (_req, res) => {
         res.json(controller.getAllStatus());
@@ -122,6 +126,7 @@ function createWebServer(controller, ha) {
     });
     // Fallback: serve index.html for all non-API routes (SPA routing)
     app.get("*", (_req, res) => {
+        res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
         res.sendFile(path_1.default.join(uiDir, "index.html"));
     });
     // Error handler
