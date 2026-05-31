@@ -472,6 +472,21 @@ html, body {
 .ep-id { font-size: 0.7rem; color: var(--gray-400); font-family: monospace; }
 .ep-empty { padding: 0.6rem 0.7rem; font-size: 0.85rem; color: var(--gray-400); }
 
+/* ===== Source toggle ===== */
+.source-toggle { display: flex; gap: 0; border: 1px solid var(--gray-200); border-radius: var(--radius); overflow: hidden; width: fit-content; }
+.source-btn {
+  padding: 0.4rem 1rem;
+  font-size: 0.85rem;
+  font-weight: 500;
+  background: var(--white);
+  color: var(--gray-600);
+  border: none;
+  cursor: pointer;
+}
+.source-btn + .source-btn { border-left: 1px solid var(--gray-200); }
+.source-btn.active { background: var(--black); color: var(--white); }
+.source-btn:hover:not(.active) { background: var(--gray-50); }
+
 /* ===== Test modal ===== */
 .test-modal-overlay {
   position: fixed; inset: 0;

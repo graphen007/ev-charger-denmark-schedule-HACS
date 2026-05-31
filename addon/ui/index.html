@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>EV Charging</title>
-  <link rel="stylesheet" href="styles.css?v=2.0.8" />
+  <link rel="stylesheet" href="styles.css?v=2.0.9" />
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.2/dist/chart.umd.min.js"></script>
 </head>
 <body>
@@ -161,14 +161,23 @@
               </select>
             </div>
             <div class="form-row">
-              <label>ENTSO-E security token <span class="label-note">free at transparency.entsoe.eu</span></label>
-              <input id="ps-entso-token" type="text" placeholder="Leave empty to use elprisenligenu.dk (no key needed)" />
+              <label>Source</label>
+              <div class="source-toggle">
+                <button type="button" class="source-btn active" data-source="elpris">elprisenligenu.dk</button>
+                <button type="button" class="source-btn" data-source="entsoe">ENTSO-E</button>
+              </div>
             </div>
-            <div class="form-row">
-              <label>EUR/DKK rate <span class="label-note">used when ENTSO-E token is set</span></label>
-              <input id="ps-eur-dkk" type="number" step="0.01" value="7.46" />
+            <div id="entsoe-fields" style="display:none">
+              <div class="form-row">
+                <label>Security token <span class="label-note">free at transparency.entsoe.eu</span></label>
+                <input id="ps-entso-token" type="text" placeholder="Paste your ENTSO-E token here" />
+              </div>
+              <div class="form-row">
+                <label>EUR/DKK rate</label>
+                <input id="ps-eur-dkk" type="number" step="0.01" value="7.46" />
+              </div>
             </div>
-            <div class="form-actions"><button type="submit" class="btn btn-primary">Save</button></div>
+            <div class="form-actions"><button type="submit" class="btn btn-primary">Save &amp; refresh prices</button></div>
           </form>
         </section>
 
@@ -209,6 +218,6 @@
 
     </main>
   </div>
-  <script src="app.js?v=2.0.8"></script>
+  <script src="app.js?v=2.0.9"></script>
 </body>
 </html>

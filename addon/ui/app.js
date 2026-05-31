@@ -467,6 +467,14 @@ function renderPriceSourceForm() {
   if (tokenEl) tokenEl.value = s.entso_e_token ?? "";
   const rateEl = document.getElementById("ps-eur-dkk");
   if (rateEl) rateEl.value = s.eur_dkk_rate ?? 7.46;
+
+  // Set active toggle based on whether a token is stored
+  const useEntsoe = !!(s.entso_e_token);
+  document.querySelectorAll(".source-btn").forEach(btn => {
+    btn.classList.toggle("active", btn.dataset.source === (useEntsoe ? "entsoe" : "elpris"));
+  });
+  const fields = document.getElementById("entsoe-fields");
+  if (fields) fields.style.display = useEntsoe ? "" : "none";
 }
 
 // ---- Searchable entity picker ----
@@ -759,15 +767,24 @@ document.addEventListener("DOMContentLoaded", () => {
     document.getElementById("car-form-card").style.display = "none";
   });
 
+  // Source toggle
+  document.querySelectorAll(".source-btn").forEach(btn => {
+    btn.addEventListener("click", () => {
+      document.querySelectorAll(".source-btn").forEach(b => b.classList.remove("active"));
+      btn.classList.add("active");
+      document.getElementById("entsoe-fields").style.display = btn.dataset.source === "entsoe" ? "" : "none";
+    });
+  });
+
   document.getElementById("price-source-form").addEventListener("submit", async e => {
     e.preventDefault();
+    const useEntsoe = document.querySelector(".source-btn.active")?.dataset.source === "entsoe";
     const s = await api("GET", "/api/settings");
     s.area          = document.getElementById("ps-area").value;
-    s.entso_e_token = document.getElementById("ps-entso-token").value.trim();
+    s.entso_e_token = useEntsoe ? (document.getElementById("ps-entso-token").value.trim()) : "";
     s.eur_dkk_rate  = parseFloat(document.getElementById("ps-eur-dkk").value) || 7.46;
     await api("POST", "/api/settings", s);
     state.settings = await api("GET", "/api/settings");
-    // Trigger price refresh with new settings
     await api("POST", "/api/refresh").catch(() => {});
     const priceResp = await api("GET", "/api/prices");
     state.prices = priceResp.slots ?? priceResp;
