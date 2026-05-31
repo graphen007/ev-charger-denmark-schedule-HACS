@@ -14,24 +14,46 @@ class HaClient {
         this.msgId = 1;
         this.pendingCalls = new Map();
         this.stateHandlers = [];
+        this.connectHandlers = [];
         this.states = new Map();
         this.reconnectTimer = null;
+        this.everConnected = false;
     }
-    async connect() {
+    /**
+     * Single connection attempt. Resolves on auth_ok, rejects on auth_invalid or close-before-auth.
+     * Does NOT retry — callers should use connectWithRetry().
+     */
+    connect() {
+        if (this.reconnectTimer) {
+            clearTimeout(this.reconnectTimer);
+            this.reconnectTimer = null;
+        }
         return new Promise((resolve, reject) => {
+            let settled = false;
+            const done = (err) => {
+                if (settled)
+                    return;
+                settled = true;
+                err ? reject(err) : resolve();
+            };
             console.log(`[HaClient] Connecting to ${HA_WS_URL}`);
             this.ws = new ws_1.default(HA_WS_URL);
             this.ws.on("message", (raw) => {
                 const msg = JSON.parse(raw.toString());
-                this.handleMessage(msg, resolve, reject);
+                this.handleMessage(msg, done);
             });
             this.ws.on("close", () => {
-                console.warn("[HaClient] WS closed — reconnecting in 5s");
-                this.scheduleReconnect();
+                // If we were previously authenticated, reconnect silently.
+                // Otherwise reject so the caller's retry loop can handle it.
+                if (this.everConnected) {
+                    console.warn("[HaClient] WS closed — reconnecting in 5s");
+                    this.scheduleReconnect();
+                }
+                done(new Error("WS closed before auth"));
             });
             this.ws.on("error", (err) => {
                 console.error("[HaClient] WS error:", err.message);
-                reject(err);
+                // close event fires after error; it will call done() with an error
             });
         });
     }
@@ -42,25 +64,32 @@ class HaClient {
             this.reconnectTimer = null;
             try {
                 await this.connect();
+                // Re-fire connect handlers so caller can re-check plugged cars, etc.
+                for (const h of this.connectHandlers)
+                    h();
             }
-            catch { }
+            catch {
+                this.scheduleReconnect(); // keep retrying
+            }
         }, 5000);
     }
-    async handleMessage(msg, connectResolve, connectReject) {
+    async handleMessage(msg, done) {
         if (msg.type === "auth_required") {
             this.send({ type: "auth", access_token: HA_TOKEN });
             return;
         }
         if (msg.type === "auth_ok") {
-            console.log("[HaClient] Authenticated");
+            console.log("[HaClient] Authenticated ✓");
             await this.loadAllStates();
             await this.subscribeEvents();
-            connectResolve?.();
+            this.everConnected = true;
+            done(); // resolve the connect() Promise
+            for (const h of this.connectHandlers)
+                h(); // notify subscribers
             return;
         }
         if (msg.type === "auth_invalid") {
-            const err = new Error("HA authentication failed — check SUPERVISOR_TOKEN");
-            connectReject?.(err);
+            done(new Error("HA authentication failed — SUPERVISOR_TOKEN invalid"));
             return;
         }
         if (msg.type === "result") {
@@ -108,6 +137,10 @@ class HaClient {
     async subscribeEvents() {
         await this.callWs({ type: "subscribe_events", event_type: "state_changed" });
         console.log("[HaClient] Subscribed to state_changed events");
+    }
+    /** Called every time a (re)connection is established and auth_ok received. */
+    onConnect(handler) {
+        this.connectHandlers.push(handler);
     }
     onStateChanged(handler) {
         this.stateHandlers.push(handler);

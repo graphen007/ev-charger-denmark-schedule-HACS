@@ -8,6 +8,7 @@ export interface HaState {
 }
 
 type StateChangedHandler = (entityId: string, newState: HaState, oldState: HaState | null) => void;
+type ConnectHandler = () => void;
 
 const HA_WS_URL = process.env.HA_WS_URL ?? "ws://supervisor/core/api/websocket";
 const HA_TOKEN  = process.env.SUPERVISOR_TOKEN ?? process.env.HA_TOKEN ?? "";
@@ -18,27 +19,47 @@ export class HaClient {
   private msgId = 1;
   private pendingCalls = new Map<number, { resolve: (v: unknown) => void; reject: (e: Error) => void }>();
   private stateHandlers: StateChangedHandler[] = [];
+  private connectHandlers: ConnectHandler[] = [];
   private states: Map<string, HaState> = new Map();
   private reconnectTimer: NodeJS.Timeout | null = null;
+  private everConnected = false;
 
-  async connect(): Promise<void> {
+  /**
+   * Single connection attempt. Resolves on auth_ok, rejects on auth_invalid or close-before-auth.
+   * Does NOT retry — callers should use connectWithRetry().
+   */
+  connect(): Promise<void> {
+    if (this.reconnectTimer) { clearTimeout(this.reconnectTimer); this.reconnectTimer = null; }
+
     return new Promise((resolve, reject) => {
+      let settled = false;
+      const done = (err?: Error) => {
+        if (settled) return;
+        settled = true;
+        err ? reject(err) : resolve();
+      };
+
       console.log(`[HaClient] Connecting to ${HA_WS_URL}`);
       this.ws = new WebSocket(HA_WS_URL);
 
       this.ws.on("message", (raw) => {
         const msg = JSON.parse(raw.toString());
-        this.handleMessage(msg, resolve, reject);
+        this.handleMessage(msg, done);
       });
 
       this.ws.on("close", () => {
-        console.warn("[HaClient] WS closed — reconnecting in 5s");
-        this.scheduleReconnect();
+        // If we were previously authenticated, reconnect silently.
+        // Otherwise reject so the caller's retry loop can handle it.
+        if (this.everConnected) {
+          console.warn("[HaClient] WS closed — reconnecting in 5s");
+          this.scheduleReconnect();
+        }
+        done(new Error("WS closed before auth"));
       });
 
       this.ws.on("error", (err) => {
         console.error("[HaClient] WS error:", err.message);
-        reject(err);
+        // close event fires after error; it will call done() with an error
       });
     });
   }
@@ -47,27 +68,34 @@ export class HaClient {
     if (this.reconnectTimer) return;
     this.reconnectTimer = setTimeout(async () => {
       this.reconnectTimer = null;
-      try { await this.connect(); } catch {}
+      try {
+        await this.connect();
+        // Re-fire connect handlers so caller can re-check plugged cars, etc.
+        for (const h of this.connectHandlers) h();
+      } catch {
+        this.scheduleReconnect(); // keep retrying
+      }
     }, 5000);
   }
 
-  private async handleMessage(msg: Record<string, unknown>, connectResolve?: (v: void) => void, connectReject?: (e: Error) => void) {
+  private async handleMessage(msg: Record<string, unknown>, done: (err?: Error) => void) {
     if (msg.type === "auth_required") {
       this.send({ type: "auth", access_token: HA_TOKEN });
       return;
     }
 
     if (msg.type === "auth_ok") {
-      console.log("[HaClient] Authenticated");
+      console.log("[HaClient] Authenticated ✓");
       await this.loadAllStates();
       await this.subscribeEvents();
-      connectResolve?.();
+      this.everConnected = true;
+      done();                                     // resolve the connect() Promise
+      for (const h of this.connectHandlers) h();  // notify subscribers
       return;
     }
 
     if (msg.type === "auth_invalid") {
-      const err = new Error("HA authentication failed — check SUPERVISOR_TOKEN");
-      connectReject?.(err);
+      done(new Error("HA authentication failed — SUPERVISOR_TOKEN invalid"));
       return;
     }
 
@@ -118,6 +146,11 @@ export class HaClient {
     console.log("[HaClient] Subscribed to state_changed events");
   }
 
+  /** Called every time a (re)connection is established and auth_ok received. */
+  onConnect(handler: ConnectHandler) {
+    this.connectHandlers.push(handler);
+  }
+
   onStateChanged(handler: StateChangedHandler) {
     this.stateHandlers.push(handler);
   }
@@ -155,3 +188,4 @@ export class HaClient {
     }
   }
 }
+
