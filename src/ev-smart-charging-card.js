@@ -165,9 +165,21 @@ class EvSmartChargingCard extends LitElement {
     }
 
     const now = new Date();
+    const mode = this._settings?.mode;
+
+    // "Charge Now" — bypass slot logic, just turn on immediately
+    if (mode === "Charge Now") {
+      const currentState = this.hass.states[car.charging_switch]?.state;
+      if (currentState !== "on") {
+        await setCharging(this.hass, car.charging_switch, true);
+        return "▶ Charging started (Charge Now mode)";
+      }
+      return "✓ Already charging";
+    }
+
+    // Find the current 15-min slot by localDate
     const currentSlot = this._plan.find((s) => {
-      const start = new Date(s.start);
-      return now >= start && now < new Date(start.getTime() + 15 * 60 * 1000);
+      return now >= s.localDate && now < new Date(s.localDate.getTime() + 15 * 60 * 1000);
     });
 
     if (!currentSlot) return "No slot for current time";
