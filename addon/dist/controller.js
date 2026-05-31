@@ -210,7 +210,7 @@ class Controller {
         const { area, cars } = (0, settings_js_1.loadSettings)();
         console.log(`[Controller] Fetching prices for ${area}…`);
         try {
-            // Try HA Nord Pool entity first (more reliable inside the addon)
+            // Try HA Nord Pool entity first (most reliable inside the addon)
             let today;
             let tomorrow;
             const haResult = this.fetchPricesFromHaEntities();
@@ -220,11 +220,12 @@ class Controller {
                 console.log(`[Controller] Prices from HA Nord Pool: ${today.length} today + ${tomorrow.length} tomorrow`);
             }
             else {
-                // Fall back to Energinet public API
-                const fetched = await (0, priceClient_js_1.fetchPrices)(area);
+                // Use ENTSO-E (if token set) or elprisenligenu.dk fallback
+                const { entso_e_token, eur_dkk_rate } = (0, settings_js_1.loadSettings)();
+                const fetched = await (0, priceClient_js_1.fetchPrices)(area, entso_e_token, eur_dkk_rate);
                 today = fetched.today;
                 tomorrow = fetched.tomorrow;
-                console.log(`[Controller] Prices from Energinet: ${today.length} today + ${tomorrow.length} tomorrow`);
+                console.log(`[Controller] Prices from ${entso_e_token ? "ENTSO-E" : "elprisenligenu.dk"}: ${today.length} today + ${tomorrow.length} tomorrow`);
             }
             this.lastPriceError = null;
             this.priceSlots = [...today, ...tomorrow];

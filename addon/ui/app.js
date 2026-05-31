@@ -454,8 +454,19 @@ async function renderHistory() {
 function renderSettingsView() {
   if (!state.settings) return;
   renderCarsList();
+  renderPriceSourceForm();
   renderTariffsForm();
   renderNotifForm();
+}
+
+function renderPriceSourceForm() {
+  const s = state.settings;
+  const areaEl = document.getElementById("ps-area");
+  if (areaEl) areaEl.value = s.area ?? "DK1";
+  const tokenEl = document.getElementById("ps-entso-token");
+  if (tokenEl) tokenEl.value = s.entso_e_token ?? "";
+  const rateEl = document.getElementById("ps-eur-dkk");
+  if (rateEl) rateEl.value = s.eur_dkk_rate ?? 7.46;
 }
 
 // ---- Searchable entity picker ----
@@ -746,6 +757,22 @@ document.addEventListener("DOMContentLoaded", () => {
 
   document.getElementById("cf-cancel").addEventListener("click", () => {
     document.getElementById("car-form-card").style.display = "none";
+  });
+
+  document.getElementById("price-source-form").addEventListener("submit", async e => {
+    e.preventDefault();
+    const s = await api("GET", "/api/settings");
+    s.area          = document.getElementById("ps-area").value;
+    s.entso_e_token = document.getElementById("ps-entso-token").value.trim();
+    s.eur_dkk_rate  = parseFloat(document.getElementById("ps-eur-dkk").value) || 7.46;
+    await api("POST", "/api/settings", s);
+    state.settings = await api("GET", "/api/settings");
+    // Trigger price refresh with new settings
+    await api("POST", "/api/refresh").catch(() => {});
+    const priceResp = await api("GET", "/api/prices");
+    state.prices = priceResp.slots ?? priceResp;
+    state.priceError = priceResp.error ?? null;
+    renderDashboard();
   });
 
   document.getElementById("tariffs-form").addEventListener("submit", async e => {

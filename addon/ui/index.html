@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>EV Charging</title>
-  <link rel="stylesheet" href="styles.css?v=2.0.7" />
+  <link rel="stylesheet" href="styles.css?v=2.0.8" />
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.2/dist/chart.umd.min.js"></script>
 </head>
 <body>
@@ -151,6 +151,28 @@
         </section>
 
         <section class="section">
+          <h2>Price source</h2>
+          <form id="price-source-form" class="form">
+            <div class="form-row">
+              <label>Price area</label>
+              <select id="ps-area">
+                <option value="DK1">DK1 (West Denmark)</option>
+                <option value="DK2">DK2 (East Denmark)</option>
+              </select>
+            </div>
+            <div class="form-row">
+              <label>ENTSO-E security token <span class="label-note">free at transparency.entsoe.eu</span></label>
+              <input id="ps-entso-token" type="text" placeholder="Leave empty to use elprisenligenu.dk (no key needed)" />
+            </div>
+            <div class="form-row">
+              <label>EUR/DKK rate <span class="label-note">used when ENTSO-E token is set</span></label>
+              <input id="ps-eur-dkk" type="number" step="0.01" value="7.46" />
+            </div>
+            <div class="form-actions"><button type="submit" class="btn btn-primary">Save</button></div>
+          </form>
+        </section>
+
+        <section class="section">
           <h2>Tariffs <span class="label-note">N1 Nettarif C incl. 25% VAT</span></h2>
           <form id="tariffs-form" class="form tariffs-grid">
             <div class="form-row"><label>Low (00-06h)</label><input class="tf" data-key="low" type="number" step="0.01" /></div>
@@ -187,6 +209,6 @@
 
     </main>
   </div>
-  <script src="app.js?v=2.0.7"></script>
+  <script src="app.js?v=2.0.8"></script>
 </body>
 </html>

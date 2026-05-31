@@ -39,8 +39,14 @@ export function createWebServer(controller: Controller, ha: HaClient) {
     res.json(states);
   });
 
-  // ---- Global settings ----
+  // ---- Global settings (full save) ----
   app.get("/api/settings", (_req, res) => res.json(loadSettings()));
+  app.post("/api/settings", (req, res) => {
+    const current = loadSettings();
+    const updated = { ...current, ...(req.body as Partial<typeof current>) };
+    saveSettings(updated);
+    res.json({ ok: true });
+  });
 
   // ---- Cars CRUD ----
   app.get("/api/settings/cars", (_req, res) => res.json(loadSettings().cars));
@@ -152,9 +158,9 @@ export function createWebServer(controller: Controller, ha: HaClient) {
 
   // ---- Forecast ----
   app.get("/api/forecast", async (_req, res) => {
-    const { area } = loadSettings();
+    const { area, entso_e_token, eur_dkk_rate } = loadSettings();
     try {
-      const forecast = await fetchForecast(area);
+      const forecast = await fetchForecast(area, entso_e_token, eur_dkk_rate);
       res.json(forecast);
     } catch (e) {
       res.status(500).json({ error: (e as Error).message });

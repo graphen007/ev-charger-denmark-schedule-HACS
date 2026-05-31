@@ -17,6 +17,8 @@ const SETTINGS_PATH = path_1.default.join(DATA_DIR, "settings.json");
 const SESSIONS_PATH = path_1.default.join(DATA_DIR, "sessions.json");
 const DEFAULT_GLOBAL = {
     area: "DK1",
+    entso_e_token: "",
+    eur_dkk_rate: 7.46,
     tariffs: { ...planner_js_1.DEFAULT_TARIFFS },
     notifications: {
         price_published: true,

@@ -15,6 +15,8 @@ export interface NotificationSettings {
 
 export interface GlobalSettings {
   area: "DK1" | "DK2";
+  entso_e_token: string;
+  eur_dkk_rate: number;
   tariffs: Tariffs;
   notifications: NotificationSettings;
   cars: CarConfig[];
@@ -37,6 +39,8 @@ export interface ChargingSession {
 
 const DEFAULT_GLOBAL: GlobalSettings = {
   area: "DK1",
+  entso_e_token: "",
+  eur_dkk_rate: 7.46,
   tariffs: { ...DEFAULT_TARIFFS },
   notifications: {
     price_published:        true,

@@ -34,8 +34,14 @@ function createWebServer(controller, ha) {
         }));
         res.json(states);
     });
-    // ---- Global settings ----
+    // ---- Global settings (full save) ----
     app.get("/api/settings", (_req, res) => res.json((0, settings_js_1.loadSettings)()));
+    app.post("/api/settings", (req, res) => {
+        const current = (0, settings_js_1.loadSettings)();
+        const updated = { ...current, ...req.body };
+        (0, settings_js_1.saveSettings)(updated);
+        res.json({ ok: true });
+    });
     // ---- Cars CRUD ----
     app.get("/api/settings/cars", (_req, res) => res.json((0, settings_js_1.loadSettings)().cars));
     app.post("/api/settings/cars", (req, res) => {
@@ -145,9 +151,9 @@ function createWebServer(controller, ha) {
     }));
     // ---- Forecast ----
     app.get("/api/forecast", async (_req, res) => {
-        const { area } = (0, settings_js_1.loadSettings)();
+        const { area, entso_e_token, eur_dkk_rate } = (0, settings_js_1.loadSettings)();
         try {
-            const forecast = await (0, priceClient_js_1.fetchForecast)(area);
+            const forecast = await (0, priceClient_js_1.fetchForecast)(area, entso_e_token, eur_dkk_rate);
             res.json(forecast);
         }
         catch (e) {
