@@ -165,7 +165,16 @@ export class Controller {
       const state = this.carStates.get(car.id);
       const noPlugDetection = !car.plug_entity;
       if (!noPlugDetection && !state?.plugged) continue;
-      const effectiveState = state ?? { plugged: true, plan: [] };
+      // For always-on cars: ensure state is stored and plan exists
+      let effectiveState = state;
+      if (!effectiveState) {
+        effectiveState = { plugged: true, plan: [] };
+        this.carStates.set(car.id, effectiveState);
+      }
+      if (effectiveState.plan.length === 0 && this.priceSlots.length > 0) {
+        this.rebuildPlan(car);
+        effectiveState = this.carStates.get(car.id)!;
+      }
       await this.controlCar(car, effectiveState);
     }
   }
@@ -315,10 +324,12 @@ export class Controller {
         await this.notifier.priceSpike("tomorrow peak", maxEp);
       }
 
-      // Rebuild plans for all plugged cars
+      // Rebuild plans for all active cars:
+      // - plugged cars (detected via plug_entity)
+      // - always-on cars with no plug detection
       for (const car of cars) {
         const state = this.carStates.get(car.id);
-        if (state?.plugged) this.rebuildPlan(car);
+        if (state?.plugged || !car.plug_entity) this.rebuildPlan(car);
       }
       this.broadcast("prices_updated", { slots: this.priceSlots.length });
     } catch (e) {
