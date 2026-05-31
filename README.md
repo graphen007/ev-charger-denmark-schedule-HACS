@@ -1,43 +1,99 @@
 # EV Smart Charging Denmark
 
-A HACS Lovelace card for smart EV charging scheduling based on Danish Nord Pool electricity prices with N1 network tariff support.
+Smart EV charging automation for Home Assistant — **set it and forget it**.
 
-## Features
+> **v2.0 — HA Addon (recommended)** — runs 24/7 as a background service, survives HA restarts, no browser required.  
+> v1.x Lovelace card is still available for those who prefer it (see [Card installation](#lovelace-card-v1) below).
 
-- **Multiple cars** — add as many cars as you want in the card config; each has its own saved settings
-- **5 charging modes:**
-  - **Lad nu** — always charge
-  - **Billigste timer** — charge during the N cheapest hours of the day
-  - **Under grænse** — charge when effective price is below your threshold
-  - **Afgang-plan** — reach a target SoC% by your departure time using the cheapest available slots
-  - **Slukket** — manual override off
-- **Charge plan visualisation** — colour-coded hourly timeline bar + expandable hour-by-hour table
-- **Estimate summary** — kWh added, final SoC%, estimated cost
-- **Live price widget** — current / today's lowest / today's highest
-- **Automatic charging control** — turns `switch.pv5_ev_charging` on/off based on the active plan
-- **N1 nettarif C 2025** built-in (configurable for other grid operators)
-- **Works without HA integration** — cars without HA entities use manual SoC entry
+---
 
-## Installation
+## HA Addon v2.0 — Recommended
 
-### HACS (recommended)
+The addon runs as a native HA background service. Plug in your car and it automatically charges at the cheapest times. A built-in web UI (via HA Ingress) lets you configure everything without touching YAML.
+
+### Features
+
+- **Background charge control** — 5-minute tick loop checks current price slot and controls your charger switch, even when your browser is closed
+- **6 charging modes:**
+  - ⚡ **Charge Now** — start immediately
+  - 💰 **Cheapest Hours** — charge during the N cheapest hours of the day
+  - 🎯 **Below Threshold** — charge when effective price is below your ceiling
+  - 🗓️ **Departure Plan** — reach target SoC% by departure time using cheapest slots
+  - ☀️ **Solar Surplus** — charge when your solar panels produce enough surplus
+  - 🔴 **Off** — manual override
+- **15-minute slot resolution** — catches price spikes within the hour
+- **Fast charger bypass** — DC charging is never interrupted by the addon
+- **Multi-car parallel plans** — each car runs its own independent charge plan simultaneously
+- **Price forecast** — wind capacity & CO₂ intensity from Energinet (no Nord Pool integration needed)
+- **Session history** — kWh charged, estimated cost, average price per session
+- **Push notifications** — tomorrow's prices published, charge complete, price spike alerts
+- **Fully configurable via UI** — cars, tariffs, notifications, all entity dropdowns from your live HA
+
+### Web UI panels
+
+| Panel | Description |
+|-------|-------------|
+| **Dashboard** | All-cars SoC gauges, live charging status, 48h price+plan chart, price strip (Now / Lowest / Highest / Rank), smart suggestions |
+| **Plan** | Per-car mode selector, sliders, cost estimate, execute button, collapsible 15-min schedule |
+| **History** | Session table, monthly kWh bar chart, total cost & average price stats |
+| **Settings** | Add/edit/remove cars with HA entity dropdowns, N1 tariff table, notification toggles |
+
+### Addon installation
+
+1. In Home Assistant: **Settings → Add-ons → Add-on Store**
+2. Click **⋮** (three dots) → **Add custom repository**
+3. Enter: `https://github.com/graphen007/ev-charger-denmark-schedule-HACS`
+4. Find **EV Smart Charging Denmark** in the store → **Install**
+5. Click **Start** — the addon appears in your HA sidebar
+
+> The addon fetches electricity prices from the free [Energinet API](https://api.energidataservice.dk/) — no Nord Pool integration required.
+
+### First-time setup
+
+After installing, open the addon UI from the sidebar:
+
+1. Go to **Settings** → click **+ Add car**
+2. Fill in your car's name, battery size, and select HA entities from the dropdowns (charging switch, SoC sensor, plug sensor, power sensor)
+3. Optionally set solar power / house consumption sensors for Solar Surplus mode
+4. Go to **Plan** → choose a charging mode and click **▶ Execute plan now** to start immediately
+5. From then on, the addon controls charging automatically
+
+### Tariffs
+
+Default tariffs are **N1 Nettarif C 2025** for DK1 (Sabro area) including 25% VAT. Adjust in **Settings → Tariffs** if you're on a different grid operator or tariff zone.
+
+| Period | Default (DKK/kWh) |
+|--------|-------------------|
+| 00–06h (low) | 0.11 |
+| 06–17h + 21–24h, summer | 0.17 |
+| 06–17h + 21–24h, winter | 0.32 |
+| 17–21h, summer (peak) | 0.43 |
+| 17–21h, winter (peak) | 0.97 |
+| Energinet (fixed) | 0.21 |
+| EV elafgift (exempt) | 0.00 |
+
+### Requirements (addon)
+
+- Home Assistant OS or Supervised (2024.1+)
+- No additional integrations required — prices come directly from Energinet
+
+---
+
+## Lovelace Card v1
+
+The original HACS Lovelace card (v1.0.7) is still available. It runs in your browser and is suitable if you only need to control charging while viewing the dashboard.
+
+### Card installation (HACS)
+
 1. Open HACS → Frontend → ⋮ → Custom repositories
 2. Add `https://github.com/graphen007/ev-charger-denmark-schedule-HACS` as **Lovelace**
 3. Install "EV Smart Charging Denmark"
-4. Add the resource in Settings → Dashboards → Resources (or HACS does it automatically)
-
-### Manual
-1. Copy `dist/ev-smart-charging-card.js` to `<config>/www/ev-smart-charging-card.js`
-2. Add resource: `/local/ev-smart-charging-card.js` (JavaScript Module)
-
-## Card Configuration
+4. Add to a Lovelace dashboard:
 
 ```yaml
 type: custom:ev-smart-charging-card
-nordpool_entity: sensor.nord_pool_dk1_current_price
-nordpool_config_entry: YOUR_CONFIG_ENTRY_ID
+nordpool_config_entry: YOUR_CONFIG_ENTRY_ID   # Settings → Devices → Nord Pool → URL
 area: DK1
-charger_speed_kw: 9.5
 
 cars:
   - id: kia_pv5
@@ -53,49 +109,21 @@ cars:
     name: Peugeot 3008
     battery_kwh: 73.0
     charge_kw: 9.5
-    # No entities = manual SoC entry, no automatic charging control
+    # No entities = manual SoC entry
 ```
 
-### Adding a new car
+### Card manual installation
 
-Just add a new entry under `cars:`. Settings are automatically saved per car ID.
+1. Copy `dist/ev-smart-charging-card.js` to `<config>/www/ev-smart-charging-card.js`
+2. Add resource: `/local/ev-smart-charging-card.js` (JavaScript Module)
 
-```yaml
-  - id: my_new_car
-    name: My New Car
-    battery_kwh: 60.0
-    charge_kw: 9.5
-    soc_entity: sensor.my_car_battery    # optional
-    charging_switch: switch.my_charger   # optional
-```
+---
 
-### Tariff override (optional)
+## How pricing works
 
-Default tariffs are N1 Nettarif C 2025 for DK1 (Sabro area). Override with:
+Effective price = `spot × 1.25 (VAT) + N1 tariff + Energinet (0.21) + supplier add-on`
 
-```yaml
-tariffs:
-  low: 0.11           # 00:00–06:00 DKK/kWh (incl. VAT)
-  high_summer: 0.17   # 06:00–17:00 + 21:00–24:00 Apr–Sep
-  high_winter: 0.32   # 06:00–17:00 + 21:00–24:00 Oct–Mar
-  peak_summer: 0.43   # 17:00–21:00 Apr–Sep
-  peak_winter: 0.97   # 17:00–21:00 Oct–Mar
-```
-
-## Finding your Nord Pool config_entry ID
-
-In Home Assistant: Settings → Devices & Services → Nord Pool → (click the integration) → the URL contains the config entry ID, e.g. `01JPXHZEN9W8XZQYT223BPTEGC`.
-
-## How it works
-
-The card fetches today's 15-minute price slots via `nordpool.get_prices_for_date`, adds the N1 network tariff and 25% VAT to each slot, then applies your chosen charging mode to build a charge plan. It runs a background check every 5 minutes to turn your charger on or off based on the current slot in the plan.
-
-Per-car settings are saved to `input_text.ev_settings_{car_id}` helpers in HA so your configuration survives page reloads.
-
-## Requirements
-
-- Home Assistant 2024.1+
-- [Nord Pool integration](https://www.home-assistant.io/integrations/nordpool/)
+Prices are fetched in DKK/MWh and divided by 1000 for DKK/kWh. Tomorrow's prices are typically published at ~13:00 CET; the addon polls automatically.
 
 ## License
 
