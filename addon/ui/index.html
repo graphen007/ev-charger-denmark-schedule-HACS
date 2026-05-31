@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>EV Charging</title>
-  <link rel="stylesheet" href="styles.css?v=2.1.1" />
+  <link rel="stylesheet" href="styles.css?v=2.1.2" />
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.2/dist/chart.umd.min.js"></script>
 </head>
 <body>
@@ -77,7 +77,7 @@
 
         <section class="section" id="timeline-section" style="display:none">
           <h2>Schedule</h2>
-          <div id="plan-timeline"></div>
+          <div id="plan-timeline" style="position:relative;height:180px"><canvas id="plan-chart"></canvas></div>
         </section>
 
         <section class="section">
@@ -223,6 +223,6 @@
 
     </main>
   </div>
-  <script src="app.js?v=2.1.1"></script>
+  <script src="app.js?v=2.1.2"></script>
 </body>
 </html>

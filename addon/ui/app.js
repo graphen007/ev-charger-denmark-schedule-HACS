@@ -51,6 +51,7 @@ let state = {
 
 let priceChart   = null;
 let historyChart = null;
+let planChart    = null;
 
 // ---- WebSocket ----
 function connectWs() {
@@ -308,62 +309,57 @@ function renderPlan() {
 }
 
 function renderTimeline() {
-  const wrap = document.getElementById("plan-timeline");
+  const canvas = document.getElementById("plan-chart");
   const section = document.getElementById("timeline-section");
-  if (!wrap || !section) return;
+  if (!canvas || !section) return;
+
   const plan = state.status.find(c => c.carId === state.selectedPlanCar)?.plan ?? [];
-  if (!plan.length) { section.style.display = "none"; return; }
+  if (!plan.length) {
+    section.style.display = "none";
+    if (planChart) { planChart.destroy(); planChart = null; }
+    return;
+  }
   section.style.display = "";
 
-  const now = new Date();
-  const tariffs = state.settings?.tariffs ?? {};
+  const isDark = document.documentElement.dataset.theme === "dark" ||
+    (document.documentElement.dataset.theme !== "light" && window.matchMedia("(prefers-color-scheme: dark)").matches);
 
-  // Split into today and tomorrow groups
-  const todayStr = now.toDateString();
-  const groups = {};
-  plan.forEach(s => {
+  const textColor    = isDark ? "#a1a1aa" : "#71717a";
+  const gridColor    = isDark ? "rgba(255,255,255,0.06)" : "rgba(0,0,0,0.05)";
+  const pastColor    = isDark ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.08)";
+  const defaultColor = isDark ? "rgba(255,255,255,0.18)" : "rgba(0,0,0,0.15)";
+  const chargeColor  = "rgba(74,222,128,0.85)";
+
+  const now = new Date();
+  const chargingSet = new Set(plan.filter(s => s.charging).map(s => s.start));
+
+  const bgColors = plan.map(s => {
     const dt = new Date(s.start);
-    const key = dt.toDateString();
-    if (!groups[key]) groups[key] = [];
-    groups[key].push({ ...s, dt });
+    if (dt < now) return pastColor;
+    if (chargingSet.has(s.start)) return chargeColor;
+    return defaultColor;
   });
 
-  // price range for colour intensity
-  const allEps = plan.map(s => s.ep ?? 0);
-  const minEp = Math.min(...allEps), maxEp = Math.max(...allEps);
-  const range = maxEp - minEp || 1;
-
-  const rows = Object.entries(groups).map(([dayStr, slots]) => {
-    const label = dayStr === todayStr ? "Today" : new Date(slots[0].dt).toLocaleDateString("da-DK", { weekday: "long", day: "numeric", month: "short" });
-    // hour labels (every 4 hours = 16 slots)
-    const hourLabels = `<div class="tl-labels">${slots.filter((_, i) => i % 16 === 0).map(s =>
-      `<span>${s.dt.getHours().toString().padStart(2,"0")}:00</span>`).join("")}<span style="margin-left:auto">24:00</span></div>`;
-    const slotHtml = slots.map(s => {
-      const isNow = s.dt <= now && now < new Date(s.dt.getTime() + 15*60000);
-      const intensity = (s.ep - minEp) / range; // 0 = cheapest, 1 = priciest
-      let cls = "tl-slot";
-      if (s.isPast) cls += " tl-past";
-      else if (s.charging) cls += intensity < 0.33 ? " tl-charge-cheap" : intensity > 0.66 ? " tl-charge-peak" : " tl-charge-mid";
-      else cls += " tl-idle";
-      if (isNow) cls += " tl-now";
-      const tip = `${fmtTime(s.start)} — ${s.ep?.toFixed(2)} DKK/kWh${s.charging ? " (charging)" : ""}`;
-      return `<div class="${cls}" title="${tip}"></div>`;
-    }).join("");
-    return `<div class="tl-day">
-      <div class="tl-day-label">${label}</div>
-      <div class="tl-track">${slotHtml}</div>
-      ${hourLabels}
-    </div>`;
-  }).join("");
-
-  const legend = `<div class="tl-legend">
-    <span><span class="tl-legend-dot" style="background:#4ade80"></span>Charging (cheap)</span>
-    <span><span class="tl-legend-dot" style="background:#facc15"></span>Charging (mid)</span>
-    <span><span class="tl-legend-dot" style="background:#f97316"></span>Charging (peak)</span>
-    <span><span class="tl-legend-dot" style="background:var(--gray-200)"></span>Idle</span>
-  </div>`;
-
-  wrap.innerHTML = rows + legend;
+  if (planChart) planChart.destroy();
+  planChart = new Chart(canvas, {
+    type: "bar",
+    data: {
+      labels: plan.map(s => fmtTime(s.start)),
+      datasets: [{ data: plan.map(s => parseFloat((s.ep ?? 0).toFixed(3))), backgroundColor: bgColors, borderRadius: 2, borderSkipped: false }],
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: {
+        legend: { display: false },
+        tooltip: { callbacks: { label: ctx => `${ctx.raw} DKK/kWh${chargingSet.has(plan[ctx.dataIndex].start) ? " ⚡ charging" : ""}` } },
+      },
+      scales: {
+        x: { ticks: { maxTicksLimit: 12, color: textColor, font: { size: 11 } }, grid: { display: false } },
+        y: { ticks: { color: textColor, font: { size: 11 } }, grid: { color: gridColor } },
+      },
+      animation: { duration: 200 },
+    },
+  });
 }
 
 
@@ -766,6 +762,7 @@ document.addEventListener("DOMContentLoaded", () => {
     html.dataset.theme = isDark ? "light" : "dark";
     localStorage.setItem("ev-theme", html.dataset.theme);
     renderPriceChart(); // rebuild with correct dark/light colors
+    renderTimeline();
   });
 
   document.querySelectorAll(".nav-link").forEach(link => {
