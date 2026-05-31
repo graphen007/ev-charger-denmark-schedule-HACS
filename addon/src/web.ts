@@ -112,8 +112,8 @@ export function createWebServer(controller: Controller, ha: HaClient) {
     if (!car) { res.status(404).json({ error: "Car not found" }); return; }
     const settings = getCarSettings(req.params.carId);
     const prices = controller.getPriceSlots();
-    const { soc: currentSoc, solarSurplusKw } = controller.getLiveCarData(car);
-    const plan = buildChargePlan(prices, settings, tariffs ?? {}, currentSoc, car.battery_kwh, car.charge_kw, solarSurplusKw);
+    const { soc: currentSoc } = controller.getLiveCarData(car);
+    const plan = buildChargePlan(prices, settings, tariffs ?? {}, currentSoc, car.battery_kwh, car.charge_kw);
     res.json({ plan, settings });
   });
 
@@ -142,12 +142,10 @@ export function createWebServer(controller: Controller, ha: HaClient) {
       haConnected: ha.isConnected(),
       entities: [
         readEntity(car.charging_switch,          "Charging switch"),
-        readEntity(car.soc_entity,               "SoC sensor"),
-        readEntity(car.plug_entity,              "Plug sensor"),
-        readEntity(car.power_entity,             "Power sensor"),
-        readEntity(car.charge_limit_entity,      "Charge limit"),
-        readEntity(car.solar_power_entity,       "Solar power"),
-        readEntity(car.house_consumption_entity, "House consumption"),
+        readEntity(car.soc_entity,          "SoC sensor"),
+        readEntity(car.plug_entity,         "Plug sensor"),
+        readEntity(car.power_entity,        "Power sensor"),
+        readEntity(car.charge_limit_entity, "Charge limit"),
       ].filter(e => e.entity_id !== null),
     });
   });

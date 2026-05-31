@@ -53,13 +53,11 @@ export interface CarConfig {
   plug_entity?: string;
   power_entity?: string;
   charge_limit_entity?: string;
-  solar_power_entity?: string;
-  house_consumption_entity?: string;
   refresh_entity?: string;  // button/script to trigger a cloud data refresh
 }
 
 export interface CarSettings {
-  mode: "Charge Now" | "Cheapest Hours" | "Solar Surplus" | "Off";
+  mode: "Charge Now" | "Cheapest Hours" | "Off";
   price_threshold: number;   // kept for migration compat, unused
   max_price_cap: number;     // never charge above this effective price (DKK/kWh), 0 = no cap
   cheapest_hours: number;
@@ -104,7 +102,6 @@ export function buildChargePlan(
   currentSoc: number,
   batterKwh: number,
   chargeKw: number,
-  solarSurplusKw = 0,
 ): Slot[] {
   if (!slots.length) return [];
 
@@ -145,11 +142,6 @@ export function buildChargePlan(
       if (max_price_cap > 0) window = window.filter((s) => s.ep <= max_price_cap);
       const pick = window.length <= slotsNeeded ? window : [...window].sort((a, b) => a.ep - b.ep).slice(0, slotsNeeded);
       pick.forEach((s) => charging.add(s.start));
-    }
-
-  } else if (mode === "Solar Surplus") {
-    if (solarSurplusKw >= chargeKw * 0.8) {
-      future.slice(0, 4).forEach((s) => charging.add(s.start));
     }
   }
   // "Off" → nothing charged

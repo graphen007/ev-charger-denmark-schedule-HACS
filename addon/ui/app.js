@@ -10,7 +10,6 @@ const BASE_URL = (() => {
 const MODES = [
   { id: "Charge Now",       desc: "Start immediately" },
   { id: "Cheapest Hours",   desc: "Cheapest slots to reach target SoC" },
-  { id: "Solar Surplus",    desc: "When solar produces surplus" },
   { id: "Off",              desc: "Manual override off" },
 ];
 
@@ -45,6 +44,8 @@ let state = {
   carSettings:     {},
   haEntities:      [],
   editingCarId:    null,
+  previewPlan:     null,   // last fetched preview plan — shown in chart alongside active plan
+  settings:        null,
 };
 
 let priceChart   = null;
@@ -177,8 +178,6 @@ function renderCarsGrid() {
         const nextSlot = car.plan?.find(s => !s.isPast && s.charging && new Date(s.start) > now);
         actionLine = nextSlot ? `Next charge at ${fmtTime(nextSlot.start)}` : "Target SoC reached";
       }
-    } else if (cs.mode === "Solar Surplus") {
-      actionLine = "Waiting for solar surplus";
     } else if (cs.mode === "Charge Now") {
       actionLine = "Starting charge...";
     } else {
@@ -514,8 +513,14 @@ function renderTimeline(overridePlan) {
   const section = document.getElementById("timeline-section");
   if (!canvas || !section) return;
 
-  const plan = overridePlan ?? state.status.find(c => c.carId === state.selectedPlanCar)?.plan ?? [];
-  if (!plan.length) {
+  // Active plan = what the controller is running now
+  const activePlan   = state.status.find(c => c.carId === state.selectedPlanCar)?.plan ?? [];
+  // Preview plan = what WILL run after Apply (set by loadAndRenderPreview)
+  const previewPlan  = overridePlan ?? state.previewPlan ?? [];
+
+  // Use whichever has slots as the basis for the x-axis
+  const basePlan = activePlan.length ? activePlan : previewPlan;
+  if (!basePlan.length) {
     section.style.display = "none";
     if (planChart) { planChart.destroy(); planChart = null; }
     return;
@@ -529,50 +534,70 @@ function renderTimeline(overridePlan) {
   const gridColor    = isDark ? "rgba(255,255,255,0.06)" : "rgba(0,0,0,0.05)";
   const pastColor    = isDark ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.08)";
   const defaultColor = isDark ? "rgba(255,255,255,0.18)" : "rgba(0,0,0,0.15)";
-  const chargeColor  = "rgba(74,222,128,0.85)";
+  const activeColor  = "rgba(74,222,128,0.9)";   // green  — current plan
+  const previewColor = "rgba(99,102,241,0.75)";  // indigo — new plan
+  const bothColor    = "rgba(74,222,128,0.9)";   // green  — in both (active wins)
 
   const now = new Date();
-  const chargingSet = new Set(plan.filter(s => s.charging).map(s => s.start));
+  const activeSet  = new Set(activePlan.filter(s => s.charging).map(s => s.start));
+  const previewSet = new Set(previewPlan.filter(s => s.charging).map(s => s.start));
 
-  const bgColors = plan.map(s => {
-    const dt = new Date(s.start);
-    if (dt < now) return pastColor;
-    if (chargingSet.has(s.start)) return chargeColor;
+  const bgColors = basePlan.map(s => {
+    if (new Date(s.start) < now) return pastColor;
+    const inActive  = activeSet.has(s.start);
+    const inPreview = previewSet.has(s.start);
+    if (inActive  && inPreview)  return bothColor;
+    if (inActive)                return activeColor;
+    if (inPreview)               return previewColor;
     return defaultColor;
   });
 
-  const carStatus = state.status.find(c => c.carId === state.selectedPlanCar);
-  const socData = computeSocProjection(carStatus, plan);
-  const lineColor = isDark ? "rgba(129,140,248,0.9)" : "rgba(99,102,241,0.85)";
+  const labels   = basePlan.map(s => fmtTime(s.start));
+  const epData   = basePlan.map(s => parseFloat((s.ep ?? 0).toFixed(3)));
 
+  const carStatus = state.status.find(c => c.carId === state.selectedPlanCar);
+  const lineColor = isDark ? "rgba(129,140,248,0.9)" : "rgba(99,102,241,0.85)";
+  const socData   = computeSocProjection(carStatus, basePlan);
+
+  // Update in-place if chart already exists with matching structure
+  const expectedDatasets = socData ? 2 : 1;
+  if (planChart && planChart.data.datasets.length === expectedDatasets) {
+    planChart.data.labels = labels;
+    planChart.data.datasets[0].data = epData;
+    planChart.data.datasets[0].backgroundColor = bgColors;
+    if (socData) planChart.data.datasets[1].data = socData;
+    planChart.update("none");
+    return;
+  }
+
+  if (planChart) planChart.destroy();
   const datasets = [
-    { type: "bar", data: plan.map(s => parseFloat((s.ep ?? 0).toFixed(3))), backgroundColor: bgColors, borderRadius: 2, borderSkipped: false, yAxisID: "y" },
+    { type: "bar", data: epData, backgroundColor: bgColors, borderRadius: 2, borderSkipped: false, yAxisID: "y" },
   ];
   if (socData) datasets.push({
     type: "line", data: socData, borderColor: lineColor, backgroundColor: "transparent",
     borderWidth: 2, pointRadius: 0, tension: 0.3, yAxisID: "y2", spanGaps: false,
   });
 
-  if (planChart) planChart.destroy();
   planChart = new Chart(canvas, {
-    data: {
-      labels: plan.map(s => fmtTime(s.start)),
-      datasets,
-    },
+    data: { labels, datasets },
     options: {
       responsive: true, maintainAspectRatio: false,
       plugins: {
         legend: { display: false },
-        tooltip: { callbacks: { label: ctx => ctx.datasetIndex === 0
-          ? `${ctx.raw} DKK/kWh${chargingSet.has(plan[ctx.dataIndex].start) ? " — charging" : ""}`
-          : `SoC: ${ctx.raw}%` } },
+        tooltip: { callbacks: { label: ctx => {
+          if (ctx.datasetIndex !== 0) return `SoC: ${ctx.raw}%`;
+          const start = basePlan[ctx.dataIndex]?.start;
+          const tag = activeSet.has(start) ? " ✓ current" : previewSet.has(start) ? " → new plan" : "";
+          return `${ctx.raw} DKK/kWh${tag}`;
+        }}},
       },
       scales: {
         x:  { ticks: { maxTicksLimit: 12, color: textColor, font: { size: 11 } }, grid: { display: false } },
         y:  { ticks: { color: textColor, font: { size: 11 } }, grid: { color: gridColor } },
         y2: socData ? { position: "right", min: 0, max: 100, ticks: { color: lineColor, font: { size: 10 }, callback: v => `${v}%` }, grid: { display: false } } : undefined,
       },
-      animation: { duration: 200 },
+      animation: { duration: 0 },
     },
   });
 }
@@ -608,7 +633,7 @@ function renderModeSettings() {
   if (!el) return;
   const cs = state.carSettings[state.selectedPlanCar] ?? {};
   const mode = cs.mode;
-  if (!mode || mode === "Charge Now" || mode === "Off" || mode === "Solar Surplus") { card.style.display = "none"; return; }
+  if (!mode || mode === "Charge Now" || mode === "Off") { card.style.display = "none"; return; }
   card.style.display = "";
   let html = "";
   if (mode === "Cheapest Hours") {
@@ -721,34 +746,37 @@ async function loadAndRenderPreview() {
   const details = document.getElementById("preview-details");
   try {
     const { plan, settings } = await api("GET", `/api/car/${state.selectedPlanCar}/preview-plan`);
+    state.previewPlan = plan;  // store so renderTimeline can merge both plans
+
     const chargingSlots = plan.filter(s => s.charging);
     const chargeKw = state.settings?.cars?.find(c => c.id === state.selectedPlanCar)?.charge_kw ?? 0;
     const totalKwh  = chargingSlots.length * 0.25 * chargeKw;
     const avgEp     = chargingSlots.length ? chargingSlots.reduce((a, s) => a + s.ep, 0) / chargingSlots.length : 0;
     const totalCost = chargingSlots.reduce((a, s) => a + s.ep * 0.25 * chargeKw, 0);
 
-    // Update the summary in the plan estimate card
+    // Update the estimate card
     const estimateEl = document.getElementById("plan-estimate");
     if (estimateEl) estimateEl.innerHTML = `
-      <div class="estimate-main">+${totalKwh.toFixed(1)} kWh (preview)</div>
-      <div class="estimate-cost">Estimated cost: ~${totalCost.toFixed(2)} DKK</div>
-      <div class="estimate-stats">
-        <span>Slots: ${chargingSlots.length}</span>
-        <span>Avg: ${avgEp.toFixed(2)} DKK/kWh</span>
-        <span>Mode: <strong>${settings.mode}</strong></span>
-      </div>`;
+      <div class="estimate-main">
+        <span class="legend-dot active"></span> Current &nbsp;&nbsp;
+        <span class="legend-dot preview"></span> New plan
+      </div>
+      <div class="estimate-cost">New plan: ~${totalCost.toFixed(2)} DKK &nbsp;·&nbsp; ${chargingSlots.length} slots &nbsp;·&nbsp; avg ${avgEp.toFixed(2)} DKK/kWh</div>
+      <div class="estimate-stats"><span>Mode: <strong>${settings.mode}</strong></span></div>`;
 
-    // Update the timeline chart with preview plan
-    renderTimeline(plan);
+    // Redraw chart with both plans overlaid
+    renderTimeline();
 
-    // Update preview collapsible
-    document.getElementById("plan-estimate-preview").innerHTML = `
-      <div class="preview-summary">
-        Mode: <strong>${settings.mode}</strong> &nbsp;·&nbsp;
-        ${chargingSlots.length} slots · ~${totalKwh.toFixed(1)} kWh · ~${totalCost.toFixed(2)} DKK · avg ${avgEp.toFixed(2)} DKK/kWh
-      </div>`;
-    document.getElementById("preview-body").innerHTML = planTableRows(plan);
-    if (details) details.style.display = "";
+    // Update collapsible
+    if (details) {
+      document.getElementById("plan-estimate-preview").innerHTML = `
+        <div class="preview-summary">
+          Mode: <strong>${settings.mode}</strong> &nbsp;·&nbsp;
+          ${chargingSlots.length} slots · ~${totalKwh.toFixed(1)} kWh · ~${totalCost.toFixed(2)} DKK · avg ${avgEp.toFixed(2)} DKK/kWh
+        </div>`;
+      document.getElementById("preview-body").innerHTML = planTableRows(plan);
+      details.style.display = "";
+    }
   } catch {
     if (details) details.style.display = "none";
   }
@@ -994,17 +1022,15 @@ function openCarForm(carId = null) {
   document.getElementById("cf-name").value     = car?.name ?? "";
   document.getElementById("cf-battery").value  = car?.battery_kwh ?? 71.2;
   document.getElementById("cf-chargekw").value = car?.charge_kw ?? 9.5;
-  const entityKeys = { "cf-switch": "charging_switch", "cf-soc": "soc_entity", "cf-plug": "plug_entity", "cf-power": "power_entity", "cf-limit": "charge_limit_entity", "cf-solar": "solar_power_entity", "cf-consumption": "house_consumption_entity", "cf-refresh": "refresh_entity" };
-  const domains    = { "cf-switch": "switch", "cf-soc": "sensor", "cf-plug": "binary_sensor", "cf-power": "sensor", "cf-limit": "number", "cf-solar": "sensor", "cf-consumption": "sensor", "cf-refresh": ["button", "script"] };
+  const entityKeys = { "cf-switch": "charging_switch", "cf-soc": "soc_entity", "cf-plug": "plug_entity", "cf-power": "power_entity", "cf-limit": "charge_limit_entity", "cf-refresh": "refresh_entity" };
+  const domains    = { "cf-switch": "switch", "cf-soc": "sensor", "cf-plug": "binary_sensor", "cf-power": "sensor", "cf-limit": "number", "cf-refresh": ["button", "script"] };
   const keywords   = {
-    "cf-switch":      ["charg", "ev", "car", "vehicle", "wallbox", "zaptec", "easee", "charger"],
-    "cf-soc":         ["soc", "battery", "state_of_charge", "charge_level", "batt"],
-    "cf-plug":        ["plug", "connect", "cable", "charg", "ev", "vehicle"],
-    "cf-power":       ["power", "watt", "charg", "kw", "ev"],
-    "cf-limit":       ["limit", "charge", "max", "target", "level"],
-    "cf-solar":       ["solar", "pv", "production", "inverter", "yield"],
-    "cf-consumption": ["consumption", "house", "home", "load", "usage", "power"],
-    "cf-refresh":     ["refresh", "update", "sync", "fetch", "kia", "hyundai", "ev", "connect"],
+    "cf-switch":  ["charg", "ev", "car", "vehicle", "wallbox", "zaptec", "easee", "charger"],
+    "cf-soc":     ["soc", "battery", "state_of_charge", "charge_level", "batt"],
+    "cf-plug":    ["plug", "connect", "cable", "charg", "ev", "vehicle"],
+    "cf-power":   ["power", "watt", "charg", "kw", "ev"],
+    "cf-limit":   ["limit", "charge", "max", "target", "level"],
+    "cf-refresh": ["refresh", "update", "sync", "fetch", "kia", "hyundai", "ev", "connect"],
   };
   Object.entries(domains).forEach(([selId, domain]) => {
     const domainArr = Array.isArray(domain) ? domain : [domain];
@@ -1109,6 +1135,7 @@ document.addEventListener("DOMContentLoaded", () => {
       const r = await api("POST", `/api/execute/${state.selectedPlanCar}`);
       result.textContent = r.result ?? "Done"; result.className = "execute-result success";
       await loadStatus();  // refresh plan view after apply
+      state.previewPlan = null;  // clear preview — active plan IS the new plan now
     } catch (e) {
       result.textContent = e.message; result.className = "execute-result error";
     } finally { btn.disabled = false; btn.textContent = "Apply Plan"; }
@@ -1116,8 +1143,10 @@ document.addEventListener("DOMContentLoaded", () => {
 
   document.getElementById("plan-car-select").addEventListener("change", async e => {
     state.selectedPlanCar = e.target.value;
-    state.carSettings[state.selectedPlanCar] = await api("GET", `/api/car/${state.selectedPlanCar}/settings`).catch(() => ({}));
+    state.previewPlan = null;
+    state.carSettings[state.selectedPlanCar] = state.status.find(c => c.carId === e.target.value)?.settings ?? {};
     renderPlan();
+    loadAndRenderPreview();
   });
 
   document.getElementById("history-car-filter").addEventListener("change", renderHistory);
@@ -1137,12 +1166,10 @@ document.addEventListener("DOMContentLoaded", () => {
       charge_kw:                parseFloat(val("cf-chargekw")),
       charging_switch:          val("cf-switch")      || undefined,
       soc_entity:               val("cf-soc")         || undefined,
-      plug_entity:              val("cf-plug")         || undefined,
-      power_entity:             val("cf-power")        || undefined,
-      charge_limit_entity:      val("cf-limit")        || undefined,
-      solar_power_entity:       val("cf-solar")        || undefined,
-      house_consumption_entity: val("cf-consumption")  || undefined,
-      refresh_entity:           val("cf-refresh")       || undefined,
+      plug_entity:         val("cf-plug")    || undefined,
+      power_entity:        val("cf-power")   || undefined,
+      charge_limit_entity: val("cf-limit")   || undefined,
+      refresh_entity:      val("cf-refresh") || undefined,
     };
     if (state.editingCarId) await api("PUT",  `/api/settings/cars/${state.editingCarId}`, car);
     else                    await api("POST", "/api/settings/cars", car);

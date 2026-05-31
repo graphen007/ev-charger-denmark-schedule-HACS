@@ -304,6 +304,9 @@ html, body {
   padding: 4px 0;
 }
 .schedule-toggle::marker, .schedule-toggle::-webkit-details-marker { display: none; }
+.legend-dot { display: inline-block; width: 10px; height: 10px; border-radius: 3px; }
+.legend-dot.active  { background: rgba(74,222,128,0.9); }
+.legend-dot.preview { background: rgba(99,102,241,0.75); }
 .preview-summary { font-size: 0.8rem; color: var(--gray-400); padding: 6px 0 2px; }
 .preview-summary strong { color: var(--indigo); }
 

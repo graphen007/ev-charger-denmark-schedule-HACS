@@ -63,22 +63,14 @@ export class Controller {
     return parseFloat(state?.state ?? "0") || 0;
   }
 
-  private getSolarSurplusKw(car: CarConfig): number {
-    if (!car.solar_power_entity) return 0;
-    const solar = parseFloat(this.ha.getState(car.solar_power_entity)?.state ?? "0") || 0;
-    const consumption = car.house_consumption_entity
-      ? parseFloat(this.ha.getState(car.house_consumption_entity)?.state ?? "0") || 0
-      : 0;
-    return Math.max(0, (solar - consumption) / 1000); // assume W → kW
-  }
+  private getSolarSurplusKw(_car: CarConfig): number { return 0; }  // removed — kept as stub for getLiveCarData
 
   rebuildPlan(car: CarConfig): Slot[] {
     const settings = getCarSettings(car.id);
     const soc = this.getSoc(car);
-    const solarSurplusKw = this.getSolarSurplusKw(car);
     const plan = buildChargePlan(
       this.priceSlots, settings, loadSettings().tariffs,
-      soc, car.battery_kwh, car.charge_kw, solarSurplusKw,
+      soc, car.battery_kwh, car.charge_kw,
     );
     // Preserve existing state — only update the plan array
     const existing = this.carStates.get(car.id);
@@ -179,7 +171,9 @@ export class Controller {
     }
   }
 
-  /** Control one car's charging based on its current plan slot. */
+  /** Control one car's charging based on its current plan slot.
+   *  Called from the 5-min tick — only acts on slot-based plans (Cheapest Hours).
+   *  Charge Now / Off are one-shot actions handled by executeNow only. */
   private async controlCar(car: CarConfig, state: CarState): Promise<void> {
     const powerW = this.getPowerW(car);
 
@@ -190,47 +184,18 @@ export class Controller {
     }
 
     const settings = getCarSettings(car.id);
-    console.log(`[Controller] ${car.name}: controlCar mode=${settings.mode} switch=${car.charging_switch}`);
 
     if (!car.charging_switch) {
       console.warn(`[Controller] ${car.name}: no charging_switch configured — skipping`);
       return;
     }
 
-    // Solar surplus mode: react in real-time
-    if (settings.mode === "Solar Surplus") {
-      const surplus = this.getSolarSurplusKw(car);
-      const shouldCharge = surplus >= car.charge_kw * 0.8;
-      const isCharging = this.ha.getState(car.charging_switch)?.state === "on";
-      if (shouldCharge !== isCharging) {
-        await this.ha.callService("switch", shouldCharge ? "turn_on" : "turn_off", { entity_id: car.charging_switch });
-        saveLastCommand(car.id, { action: shouldCharge ? "start" : "stop", time: new Date().toISOString() });
-        console.log(`[Controller] ${car.name}: solar surplus ${surplus.toFixed(1)}kW — ${shouldCharge ? "started" : "paused"} charging`);
-      }
+    // Charge Now / Off are handled once by executeNow — tick does nothing for them
+    if (settings.mode === "Charge Now" || settings.mode === "Off") {
       return;
     }
 
-    // Charge Now
-    if (settings.mode === "Charge Now") {
-      if (this.ha.getState(car.charging_switch)?.state !== "on") {
-        await this.ha.callService("switch", "turn_on", { entity_id: car.charging_switch });
-        saveLastCommand(car.id, { action: "start", time: new Date().toISOString() });
-        console.log(`[Controller] ${car.name}: Charge Now — started`);
-      }
-      return;
-    }
-
-    // Off
-    if (settings.mode === "Off") {
-      if (this.ha.getState(car.charging_switch)?.state === "on") {
-        await this.ha.callService("switch", "turn_off", { entity_id: car.charging_switch });
-        saveLastCommand(car.id, { action: "stop", time: new Date().toISOString() });
-        console.log(`[Controller] ${car.name}: Off — stopped`);
-      }
-      return;
-    }
-
-    // Slot-based modes
+    // Slot-based: Cheapest Hours
     if (!state.plan.length) {
       console.log(`[Controller] ${car.name}: no plan slots — skipping (prices loaded: ${this.priceSlots.length})`);
       return;
@@ -256,6 +221,20 @@ export class Controller {
       await this.ha.callService("switch", "turn_off", { entity_id: car.charging_switch });
       saveLastCommand(car.id, { action: "stop", time: new Date().toISOString(), ep: currentSlot.ep });
       console.log(`[Controller] ${car.name}: paused (${currentSlot.ep.toFixed(2)} DKK/kWh)`);
+    }
+  }
+
+  /** Apply Charge Now / Off immediately — called only from executeNow. */
+  private async applyImmediateMode(car: CarConfig, settings: ReturnType<typeof getCarSettings>): Promise<void> {
+    if (!car.charging_switch) return;
+    if (settings.mode === "Charge Now") {
+      await this.ha.callService("switch", "turn_on", { entity_id: car.charging_switch });
+      saveLastCommand(car.id, { action: "start", time: new Date().toISOString() });
+      console.log(`[Controller] ${car.name}: Charge Now — started`);
+    } else if (settings.mode === "Off") {
+      await this.ha.callService("switch", "turn_off", { entity_id: car.charging_switch });
+      saveLastCommand(car.id, { action: "stop", time: new Date().toISOString() });
+      console.log(`[Controller] ${car.name}: Off — stopped`);
     }
   }
 
@@ -346,8 +325,8 @@ export class Controller {
   getPriceSlots(): PriceSlot[] { return this.priceSlots; }
   getLastPriceError(): string | null { return this.lastPriceError; }
   getCarState(carId: string): CarState | undefined { return this.carStates.get(carId); }
-  getLiveCarData(car: CarConfig): { soc: number; solarSurplusKw: number } {
-    return { soc: this.getSoc(car), solarSurplusKw: this.getSolarSurplusKw(car) };
+  getLiveCarData(car: CarConfig): { soc: number } {
+    return { soc: this.getSoc(car) };
   }
 
   getAllStatus() {
@@ -428,7 +407,13 @@ export class Controller {
       if (this.priceSlots.length > 0) this.rebuildPlan(car);
     }
     this.carStates.set(carId, state);
-    await this.controlCar(car, this.carStates.get(carId) ?? state);
+
+    const freshState = this.carStates.get(carId) ?? state;
+    if (settings.mode === "Charge Now" || settings.mode === "Off") {
+      await this.applyImmediateMode(car, settings);
+    } else {
+      await this.controlCar(car, freshState);
+    }
     return `${car.name}: executed`;
   }
 }
