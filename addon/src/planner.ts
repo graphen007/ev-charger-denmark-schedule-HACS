@@ -59,8 +59,9 @@ export interface CarConfig {
 }
 
 export interface CarSettings {
-  mode: "Charge Now" | "Cheapest Hours" | "Below Threshold" | "Solar Surplus" | "Off";
-  price_threshold: number;
+  mode: "Charge Now" | "Cheapest Hours" | "Solar Surplus" | "Off";
+  price_threshold: number;   // kept for migration compat, unused
+  max_price_cap: number;     // never charge above this effective price (DKK/kWh), 0 = no cap
   cheapest_hours: number;
   deadline_time: string;     // optional "HH:MM" — reach target_soc by this time (Cheapest Hours)
   target_soc: number;
@@ -71,6 +72,7 @@ export interface CarSettings {
 export const DEFAULT_CAR_SETTINGS: CarSettings = {
   mode:             "Cheapest Hours",
   price_threshold:  0.50,
+  max_price_cap:    0,       // 0 = no cap
   cheapest_hours:   4,
   deadline_time:    "",
   target_soc:       80,
@@ -121,7 +123,7 @@ export function buildChargePlan(
 
   const future = expanded.filter((s) => s.localDate >= now);
   const charging = new Set<string>();
-  const { mode, price_threshold, deadline_time, target_soc, charge_limit } = settings;
+  const { mode, price_threshold: _pt, max_price_cap, deadline_time, target_soc, charge_limit } = settings;
 
   if (mode === "Charge Now") {
     future.forEach((s) => charging.add(s.start));
@@ -131,7 +133,6 @@ export function buildChargePlan(
     const neededKwh = Math.max(0, ((targetSocActual - currentSoc) / 100) * batterKwh);
     const slotsNeeded = Math.ceil((neededKwh / chargeKw) * 4);
     if (slotsNeeded > 0) {
-      // If a deadline is set, only schedule slots before that time
       let window = future;
       if (deadline_time) {
         const [dlH, dlM] = deadline_time.split(":").map(Number);
@@ -140,13 +141,11 @@ export function buildChargePlan(
         if (dl <= now) dl.setDate(dl.getDate() + 1);
         window = future.filter((s) => s.localDate < dl);
       }
-      // If window is smaller than needed, use all of it; otherwise pick cheapest
+      // Apply price cap — never schedule slots above the cap
+      if (max_price_cap > 0) window = window.filter((s) => s.ep <= max_price_cap);
       const pick = window.length <= slotsNeeded ? window : [...window].sort((a, b) => a.ep - b.ep).slice(0, slotsNeeded);
       pick.forEach((s) => charging.add(s.start));
     }
-
-  } else if (mode === "Below Threshold") {
-    future.filter((s) => s.ep <= price_threshold).forEach((s) => charging.add(s.start));
 
   } else if (mode === "Solar Surplus") {
     if (solarSurplusKw >= chargeKw * 0.8) {

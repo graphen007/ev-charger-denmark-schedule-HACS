@@ -10,7 +10,6 @@ const BASE_URL = (() => {
 const MODES = [
   { id: "Charge Now",       desc: "Start immediately" },
   { id: "Cheapest Hours",   desc: "Cheapest slots to reach target SoC" },
-  { id: "Below Threshold",  desc: "When price is below ceiling" },
   { id: "Solar Surplus",    desc: "When solar produces surplus" },
   { id: "Off",              desc: "Manual override off" },
 ];
@@ -510,6 +509,15 @@ function renderModeSettings() {
   let html = "";
   if (mode === "Cheapest Hours") {
     html += slider("target_soc", "Target SoC", cs.target_soc ?? 80, 10, 100, 5, "%");
+    const cap = cs.max_price_cap ?? 0;
+    html += `<div class="setting-row">
+      <label>Max price cap <span class="setting-hint">(optional — skip slots above this price)</span></label>
+      <div style="display:flex;gap:.5rem;align-items:center">
+        <input type="number" id="sr-max_price_cap" value="${cap > 0 ? cap : ""}" placeholder="e.g. 1.00" min="0" step="0.05" style="flex:1;width:100%" />
+        <span style="white-space:nowrap;color:var(--gray-400);font-size:.85rem">DKK/kWh</span>
+        ${cap > 0 ? `<button class="btn-sm" id="sr-cap-clear">Clear</button>` : ""}
+      </div>
+    </div>`;
     const dl = cs.deadline_time ?? "";
     html += `<div class="setting-row">
       <label>Deadline <span class="setting-hint">(optional — reach target by this time)</span></label>
@@ -519,7 +527,6 @@ function renderModeSettings() {
       </div>
     </div>`;
   }
-  if (mode === "Below Threshold")  html += slider("price_threshold", "Price ceiling", cs.price_threshold ?? 0.5, 0.1, 5.0, 0.05, "DKK/kWh");
   html += slider("charge_limit", "AC charge limit", cs.charge_limit ?? 100, 50, 100, 5, "%");
   el.innerHTML = html;
   el.querySelectorAll("input[type=range]").forEach(inp => {
@@ -531,6 +538,19 @@ function renderModeSettings() {
       await api("POST", `/api/car/${state.selectedPlanCar}/settings`, cs2);
       await loadStatus();
     });
+  });
+  el.querySelector("#sr-max_price_cap")?.addEventListener("change", async e => {
+    const val = parseFloat(e.target.value);
+    const cs2 = { ...(state.carSettings[state.selectedPlanCar] ?? {}), max_price_cap: isNaN(val) ? 0 : val };
+    state.carSettings[state.selectedPlanCar] = cs2;
+    await api("POST", `/api/car/${state.selectedPlanCar}/settings`, cs2);
+    await loadStatus();
+  });
+  el.querySelector("#sr-cap-clear")?.addEventListener("click", async () => {
+    const cs2 = { ...(state.carSettings[state.selectedPlanCar] ?? {}), max_price_cap: 0 };
+    state.carSettings[state.selectedPlanCar] = cs2;
+    await api("POST", `/api/car/${state.selectedPlanCar}/settings`, cs2);
+    await loadStatus();
   });
   el.querySelector("#sr-deadline_time")?.addEventListener("change", async e => {
     const cs2 = { ...(state.carSettings[state.selectedPlanCar] ?? {}), deadline_time: e.target.value };
