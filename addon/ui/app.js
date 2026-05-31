@@ -441,6 +441,72 @@ function renderSettingsView() {
   renderNotifForm();
 }
 
+// ---- Searchable entity picker ----
+function setupEntityPicker(hostId, entities, selected, keywords) {
+  const host = document.getElementById(hostId);
+  if (!host) return;
+
+  const suggested = entities.filter(e =>
+    keywords.some(k => e.entity_id.toLowerCase().includes(k) || (e.friendly_name ?? "").toLowerCase().includes(k))
+  );
+  const rest = entities.filter(e => !suggested.includes(e));
+
+  const displayName = (v) => v ? (entities.find(e => e.entity_id === v)?.friendly_name ?? v) : "";
+
+  host.innerHTML = `
+    <div class="ep">
+      <input class="ep-input" type="text" autocomplete="off" placeholder="Search..." value="${displayName(selected)}">
+      <div class="ep-dropdown" hidden></div>
+      <input class="ep-value" type="hidden" value="${selected ?? ""}">
+    </div>`;
+
+  const input    = host.querySelector(".ep-input");
+  const dropdown = host.querySelector(".ep-dropdown");
+  const hidden   = host.querySelector(".ep-value");
+
+  function buildList(filter) {
+    const q = filter.toLowerCase();
+    const match = e => !q || e.entity_id.toLowerCase().includes(q) || (e.friendly_name ?? "").toLowerCase().includes(q);
+    const filtSuggested = suggested.filter(match);
+    const filtRest      = rest.filter(match);
+    let html = `<div class="ep-option" data-value="">(none)</div>`;
+    if (filtSuggested.length) {
+      html += `<div class="ep-group">Suggested</div>`;
+      html += filtSuggested.map(e => optionHtml(e)).join("");
+    }
+    if (filtRest.length) {
+      if (filtSuggested.length) html += `<div class="ep-group">All</div>`;
+      html += filtRest.map(e => optionHtml(e)).join("");
+    }
+    if (!filtSuggested.length && !filtRest.length) html += `<div class="ep-empty">No results</div>`;
+    dropdown.innerHTML = html;
+    dropdown.querySelectorAll(".ep-option").forEach(opt => {
+      if (opt.dataset.value === hidden.value) opt.classList.add("selected");
+      opt.addEventListener("mousedown", (ev) => {
+        ev.preventDefault();
+        hidden.value  = opt.dataset.value;
+        input.value   = opt.dataset.value ? (entities.find(e => e.entity_id === opt.dataset.value)?.friendly_name ?? opt.dataset.value) : "";
+        dropdown.hidden = true;
+      });
+    });
+  }
+
+  function optionHtml(e) {
+    return `<div class="ep-option" data-value="${e.entity_id}">
+      ${e.friendly_name ?? e.entity_id}
+      <span class="ep-id">${e.entity_id}</span>
+    </div>`;
+  }
+
+  input.addEventListener("focus", () => { buildList(input.value); dropdown.hidden = false; });
+  input.addEventListener("input", () => { buildList(input.value); dropdown.hidden = false; });
+  input.addEventListener("blur",  () => {
+    setTimeout(() => { dropdown.hidden = true; }, 150);
+    // Restore display name if user typed something invalid
+    input.value = displayName(hidden.value);
+  });
+}
+
 function renderCarsList() {
   const el = document.getElementById("cars-list");
   if (!el) return;
@@ -474,12 +540,19 @@ function openCarForm(carId = null) {
   document.getElementById("cf-chargekw").value = car?.charge_kw ?? 9.5;
   const entityKeys = { "cf-switch": "charging_switch", "cf-soc": "soc_entity", "cf-plug": "plug_entity", "cf-power": "power_entity", "cf-limit": "charge_limit_entity", "cf-solar": "solar_power_entity", "cf-consumption": "house_consumption_entity" };
   const domains    = { "cf-switch": "switch", "cf-soc": "sensor", "cf-plug": "binary_sensor", "cf-power": "sensor", "cf-limit": "number", "cf-solar": "sensor", "cf-consumption": "sensor" };
+  const keywords   = {
+    "cf-switch":      ["charg", "ev", "car", "vehicle", "wallbox", "zaptec", "easee", "charger"],
+    "cf-soc":         ["soc", "battery", "state_of_charge", "charge_level", "batt"],
+    "cf-plug":        ["plug", "connect", "cable", "charg", "ev", "vehicle"],
+    "cf-power":       ["power", "watt", "charg", "kw", "ev"],
+    "cf-limit":       ["limit", "charge", "max", "target", "level"],
+    "cf-solar":       ["solar", "pv", "production", "inverter", "yield"],
+    "cf-consumption": ["consumption", "house", "home", "load", "usage", "power"],
+  };
   Object.entries(domains).forEach(([selId, domain]) => {
-    const sel = document.getElementById(selId);
     const entities = state.haEntities.filter(e => e.domain === domain);
-    sel.innerHTML = `<option value="">(none)</option>` + entities.map(e =>
-      `<option value="${e.entity_id}" ${car?.[entityKeys[selId]] === e.entity_id ? "selected" : ""}>${e.friendly_name}</option>`
-    ).join("");
+    const current  = car?.[entityKeys[selId]] ?? "";
+    setupEntityPicker(selId, entities, current, keywords[selId] ?? []);
   });
   card.scrollIntoView({ behavior: "smooth" });
 }
@@ -571,7 +644,11 @@ document.addEventListener("DOMContentLoaded", () => {
 
   document.getElementById("car-form").addEventListener("submit", async e => {
     e.preventDefault();
-    const val = id => document.getElementById(id).value;
+    const val = id => {
+      const el = document.getElementById(id);
+      if (el?.classList.contains("ep-host")) return el.querySelector(".ep-value")?.value ?? "";
+      return el?.value ?? "";
+    };
     const car = {
       id:                       val("cf-id").trim(),
       name:                     val("cf-name").trim(),

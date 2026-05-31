@@ -421,6 +421,57 @@ html, body {
 }
 .theme-toggle:hover { background: var(--gray-100); color: var(--black); }
 
+/* ===== Entity Picker (searchable combobox) ===== */
+.ep { position: relative; }
+.ep-input {
+  width: 100%;
+  padding: 0.45rem 0.6rem;
+  border: 1px solid var(--gray-200);
+  border-radius: var(--radius);
+  background: var(--white);
+  color: var(--black);
+  font-size: 0.85rem;
+  box-sizing: border-box;
+  cursor: pointer;
+}
+.ep-input:focus { outline: none; border-color: var(--black); }
+.ep-dropdown {
+  position: absolute;
+  top: calc(100% + 2px);
+  left: 0; right: 0;
+  background: var(--white);
+  border: 1px solid var(--gray-200);
+  border-radius: var(--radius);
+  box-shadow: 0 4px 16px rgba(0,0,0,0.12);
+  z-index: 100;
+  max-height: 260px;
+  overflow-y: auto;
+}
+.ep-group {
+  padding: 0.3rem 0.7rem;
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--gray-400);
+  background: var(--gray-50);
+  border-bottom: 1px solid var(--gray-100);
+  position: sticky;
+  top: 0;
+}
+.ep-option {
+  padding: 0.45rem 0.7rem;
+  cursor: pointer;
+  font-size: 0.85rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.ep-option:hover, .ep-option.focused { background: var(--gray-50); }
+.ep-option.selected { font-weight: 600; }
+.ep-id { font-size: 0.7rem; color: var(--gray-400); font-family: monospace; }
+.ep-empty { padding: 0.6rem 0.7rem; font-size: 0.85rem; color: var(--gray-400); }
+
 /* ===== Responsive ===== */
 @media (max-width: 640px) {
   .content { padding: 1rem; }

@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>EV Charging</title>
-  <link rel="stylesheet" href="styles.css?v=2.0.3" />
+  <link rel="stylesheet" href="styles.css?v=2.0.5" />
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.2/dist/chart.umd.min.js"></script>
 </head>
 <body>
@@ -136,13 +136,13 @@
             <div class="form-row"><label>Name</label><input id="cf-name" type="text" placeholder="Kia PV5" /></div>
             <div class="form-row"><label>Battery (kWh)</label><input id="cf-battery" type="number" step="0.1" value="71.2" /></div>
             <div class="form-row"><label>Charge speed (kW)</label><input id="cf-chargekw" type="number" step="0.5" value="9.5" /></div>
-            <div class="form-row"><label>Charging switch</label><select id="cf-switch"></select></div>
-            <div class="form-row"><label>SoC sensor</label><select id="cf-soc"></select></div>
-            <div class="form-row"><label>Plug sensor</label><select id="cf-plug"></select></div>
-            <div class="form-row"><label>Power sensor</label><select id="cf-power"></select></div>
-            <div class="form-row"><label>Charge limit entity</label><select id="cf-limit"></select></div>
-            <div class="form-row"><label>Solar power sensor (optional)</label><select id="cf-solar"></select></div>
-            <div class="form-row"><label>House consumption sensor (optional)</label><select id="cf-consumption"></select></div>
+            <div class="form-row"><label>Charging switch</label><div id="cf-switch" class="ep-host"></div></div>
+            <div class="form-row"><label>SoC sensor</label><div id="cf-soc" class="ep-host"></div></div>
+            <div class="form-row"><label>Plug sensor</label><div id="cf-plug" class="ep-host"></div></div>
+            <div class="form-row"><label>Power sensor</label><div id="cf-power" class="ep-host"></div></div>
+            <div class="form-row"><label>Charge limit entity</label><div id="cf-limit" class="ep-host"></div></div>
+            <div class="form-row"><label>Solar power sensor (optional)</label><div id="cf-solar" class="ep-host"></div></div>
+            <div class="form-row"><label>House consumption sensor (optional)</label><div id="cf-consumption" class="ep-host"></div></div>
             <div class="form-actions">
               <button type="submit" class="btn btn-primary" id="cf-save">Save</button>
               <button type="button" class="btn" id="cf-cancel">Cancel</button>
@@ -187,6 +187,6 @@
 
     </main>
   </div>
-  <script src="app.js?v=2.0.3"></script>
+  <script src="app.js?v=2.0.5"></script>
 </body>
 </html>
