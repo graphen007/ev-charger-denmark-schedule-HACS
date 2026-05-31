@@ -148,6 +148,7 @@ class HaClient {
     getState(entityId) {
         return this.states.get(entityId);
     }
+    isConnected() { return this.everConnected; }
     getAllStates() {
         return Array.from(this.states.values());
     }

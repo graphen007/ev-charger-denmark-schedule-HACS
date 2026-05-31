@@ -16,12 +16,25 @@ async function fetchJson(url) {
 function fmtDate(d) {
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
-/** Fetch spot prices for a date range. area = "DK1" | "DK2". */
-async function fetchSpotPrices(area, startDate, endDate) {
+/** Fetch spot prices for a single DK-local date (e.g. "2026-05-31").
+ *  The Energinet API's start/end params filter by HourUTC, not HourDK.
+ *  Denmark is UTC+1 (winter) or UTC+2 (summer), so we request a wider
+ *  UTC window (previous day 20:00 → target day 23:59) and filter the
+ *  results to only records whose HourDK starts with targetDate.
+ */
+async function fetchSpotPrices(area, targetDate) {
     const filter = JSON.stringify({ PriceArea: area });
-    const url = `${BASE}/Elspotprices?offset=0&start=${startDate}T00:00&end=${endDate}T23:59&filter=${encodeURIComponent(filter)}&sort=HourDK%20asc&limit=100`;
+    // Shift start back to catch DK midnight (= UTC 22:00 or 23:00 previous day)
+    const d = new Date(targetDate + "T12:00:00Z");
+    const prev = new Date(d);
+    prev.setUTCDate(prev.getUTCDate() - 1);
+    const prevStr = `${prev.getUTCFullYear()}-${String(prev.getUTCMonth() + 1).padStart(2, "0")}-${String(prev.getUTCDate()).padStart(2, "0")}`;
+    const url = `${BASE}/Elspotprices?offset=0&start=${prevStr}T20:00&end=${targetDate}T23:59&filter=${encodeURIComponent(filter)}&sort=HourDK%20asc&limit=50`;
     const data = await fetchJson(url);
-    return (data.records ?? []).map(isoToSlot);
+    // Keep only records for the requested DK date
+    return (data.records ?? [])
+        .filter(r => r.HourDK.startsWith(targetDate))
+        .map(isoToSlot);
 }
 /** Fetch today + tomorrow's prices. Returns combined sorted array. */
 async function fetchPrices(area) {
@@ -31,8 +44,8 @@ async function fetchPrices(area) {
     tomorrowDate.setDate(now.getDate() + 1);
     const tomorrowStr = fmtDate(tomorrowDate);
     const [todaySlots, tomorrowSlots] = await Promise.all([
-        fetchSpotPrices(area, todayStr, todayStr).catch(() => []),
-        fetchSpotPrices(area, tomorrowStr, tomorrowStr).catch(() => []),
+        fetchSpotPrices(area, todayStr).catch(() => []),
+        fetchSpotPrices(area, tomorrowStr).catch(() => []),
     ]);
     return { today: todaySlots, tomorrow: tomorrowSlots };
 }
@@ -49,7 +62,7 @@ async function fetchForecast(area) {
         d.setDate(d.getDate() - 7 * weeksBack);
         const ds = fmtDate(d);
         try {
-            const slots = await fetchSpotPrices(area, ds, ds);
+            const slots = await fetchSpotPrices(area, ds);
             if (slots.length >= 20) {
                 const avg = slots.reduce((s, p) => s + p.value, 0) / slots.length;
                 historicalPrices.push(avg);

@@ -159,6 +159,8 @@ export class HaClient {
     return this.states.get(entityId);
   }
 
+  isConnected(): boolean { return this.everConnected; }
+
   getAllStates(): HaState[] {
     return Array.from(this.states.values());
   }

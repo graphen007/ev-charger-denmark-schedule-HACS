@@ -173,7 +173,16 @@ function renderForecastBanner() {
 
 function renderPriceChart() {
   const canvas = document.getElementById("price-chart");
-  if (!canvas || !state.prices.length) return;
+  const wrap = canvas?.parentElement;
+  if (!canvas) return;
+  if (!state.prices.length) {
+    if (priceChart) { priceChart.destroy(); priceChart = null; }
+    wrap.innerHTML = `<div style="padding:2rem;text-align:center;color:var(--gray-400);font-size:.9rem">
+      No price data.<br><span style="font-size:.8rem">Energinet API may be unavailable. Prices load automatically every hour.</span>
+      <br><br><button class="btn" onclick="document.getElementById('btn-refresh').click()">Retry now</button>
+    </div><canvas id="price-chart" style="display:none"></canvas>`;
+    return;
+  }
   const now = new Date();
   const tariffs = state.settings?.tariffs ?? {};
   const planSlots = state.status?.[0]?.plan ?? [];
@@ -507,6 +516,61 @@ function setupEntityPicker(hostId, entities, selected, keywords) {
   });
 }
 
+async function testCar(carId) {
+  // Show modal immediately with loading state
+  let modal = document.getElementById("test-modal");
+  if (!modal) {
+    modal = document.createElement("div");
+    modal.id = "test-modal";
+    modal.className = "test-modal-overlay";
+    document.body.appendChild(modal);
+    modal.addEventListener("click", e => { if (e.target === modal) modal.hidden = true; });
+  }
+  modal.hidden = false;
+  modal.innerHTML = `<div class="test-modal">
+    <div class="test-modal-header"><h2>Testing car…</h2><button class="btn btn-sm" id="test-close">Close</button></div>
+    <div class="test-modal-body"><p style="color:var(--gray-400)">Reading entity states from Home Assistant…</p></div>
+  </div>`;
+  document.getElementById("test-close").onclick = () => { modal.hidden = true; };
+
+  try {
+    const result = await api("GET", `/api/car/${carId}/test`);
+    const rows = result.entities.map(e => {
+      const icon = e.ok ? "✓" : "✗";
+      const cls  = e.ok ? "test-ok" : "test-fail";
+      return `<tr class="${cls}">
+        <td>${e.label}</td>
+        <td class="test-entity-id">${e.entity_id ?? "—"}</td>
+        <td>${e.state !== null ? `${e.state}${e.unit ? " " + e.unit : ""}` : "—"}</td>
+        <td><span class="test-status-icon ${cls}">${icon}</span> ${e.note ?? (e.ok ? "OK" : "Not found")}</td>
+      </tr>`;
+    }).join("");
+    modal.innerHTML = `<div class="test-modal">
+      <div class="test-modal-header">
+        <div>
+          <h2>${result.car}</h2>
+          <span class="test-ha-status ${result.haConnected ? "test-ok" : "test-fail"}">HA ${result.haConnected ? "Connected" : "Not connected"}</span>
+        </div>
+        <button class="btn btn-sm" id="test-close">Close</button>
+      </div>
+      <div class="test-modal-body">
+        ${result.entities.length === 0 ? '<p style="color:var(--gray-400)">No entities configured. Edit the car to add sensors.</p>' : `
+        <table class="data-table test-table">
+          <thead><tr><th>Sensor</th><th>Entity ID</th><th>Current value</th><th>Status</th></tr></thead>
+          <tbody>${rows}</tbody>
+        </table>`}
+      </div>
+    </div>`;
+    document.getElementById("test-close").onclick = () => { modal.hidden = true; };
+  } catch (e) {
+    modal.innerHTML = `<div class="test-modal">
+      <div class="test-modal-header"><h2>Test failed</h2><button class="btn btn-sm" id="test-close">Close</button></div>
+      <div class="test-modal-body"><p style="color:var(--red)">${e.message}</p></div>
+    </div>`;
+    document.getElementById("test-close").onclick = () => { modal.hidden = true; };
+  }
+}
+
 function renderCarsList() {
   const el = document.getElementById("cars-list");
   if (!el) return;
@@ -519,12 +583,14 @@ function renderCarsList() {
         <span class="car-list-meta">${car.battery_kwh} kWh  ${car.charge_kw} kW AC</span>
       </div>
       <div class="car-list-actions">
+        <button class="btn btn-sm" data-test="${car.id}">Test</button>
         <button class="btn btn-sm" data-edit="${car.id}">Edit</button>
         <button class="btn btn-sm btn-danger" data-delete="${car.id}">Remove</button>
       </div>
     </div>`).join("");
   el.querySelectorAll("[data-edit]").forEach(btn => btn.addEventListener("click", () => openCarForm(btn.dataset.edit)));
   el.querySelectorAll("[data-delete]").forEach(btn => btn.addEventListener("click", () => deleteCar(btn.dataset.delete)));
+  el.querySelectorAll("[data-test]").forEach(btn => btn.addEventListener("click", () => testCar(btn.dataset.test)));
 }
 
 function openCarForm(carId = null) {
@@ -622,6 +688,7 @@ document.addEventListener("DOMContentLoaded", () => {
   });
 
   document.getElementById("btn-execute").addEventListener("click", async () => {
+    if (!state.selectedPlanCar) return;
     const btn = document.getElementById("btn-execute");
     const result = document.getElementById("execute-result");
     btn.disabled = true; btn.textContent = "Running...";

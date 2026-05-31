@@ -94,7 +94,42 @@ function createWebServer(controller, ha) {
         controller.getAllStatus(); // trigger plan rebuild
         res.json({ ok: true });
     });
-    // ---- Plan ----
+    // ---- Car diagnostic test ----
+    app.get("/api/car/:carId/test", (req, res) => {
+        const { cars } = (0, settings_js_1.loadSettings)();
+        const car = cars.find(c => c.id === req.params.carId);
+        if (!car) {
+            res.status(404).json({ error: "Car not found" });
+            return;
+        }
+        function readEntity(entityId, label) {
+            if (!entityId)
+                return { label, entity_id: null, state: null, ok: false, note: "Not configured" };
+            const s = ha.getState(entityId);
+            return {
+                label,
+                entity_id: entityId,
+                state: s?.state ?? null,
+                unit: s?.attributes?.unit_of_measurement ?? null,
+                friendly_name: s?.attributes?.friendly_name ?? null,
+                ok: s !== undefined,
+                note: s === undefined ? "Entity not found in HA" : null,
+            };
+        }
+        res.json({
+            car: car.name,
+            haConnected: ha.isConnected(),
+            entities: [
+                readEntity(car.charging_switch, "Charging switch"),
+                readEntity(car.soc_entity, "SoC sensor"),
+                readEntity(car.plug_entity, "Plug sensor"),
+                readEntity(car.power_entity, "Power sensor"),
+                readEntity(car.charge_limit_entity, "Charge limit"),
+                readEntity(car.solar_power_entity, "Solar power"),
+                readEntity(car.house_consumption_entity, "House consumption"),
+            ].filter(e => e.entity_id !== null),
+        });
+    });
     app.get("/api/plan/:carId", (req, res) => {
         const state = controller.getCarState(req.params.carId);
         res.json(state?.plan ?? []);
