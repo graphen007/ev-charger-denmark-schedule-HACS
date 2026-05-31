@@ -93,7 +93,9 @@ export async function fetchTodayPrices(hass, configEntry, area = "DK1") {
         currency: "DKK",
         config_entry: configEntry,
       },
-      { return_response: true }
+      undefined,  // target
+      undefined,  // notifyOnError
+      true        // returnResponse
     );
 
     const raw = result?.response?.[area] ?? result?.[area] ?? [];
