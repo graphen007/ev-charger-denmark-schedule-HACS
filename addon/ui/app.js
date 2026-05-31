@@ -537,21 +537,38 @@ function renderTimeline(overridePlan) {
   const defaultColor = isDark ? "rgba(255,255,255,0.18)" : "rgba(0,0,0,0.15)";
   const activeColor  = "rgba(74,222,128,0.9)";   // green  — current plan
   const previewColor = "rgba(99,102,241,0.75)";  // indigo — new plan
-  const bothColor    = "rgba(74,222,128,0.9)";   // green  — in both (active wins)
 
   const now = new Date();
   const activeSet  = new Set(activePlan.filter(s => s.charging).map(s => s.start));
   const previewSet = new Set(previewPlan.filter(s => s.charging).map(s => s.start));
 
-  const bgColors = basePlan.map(s => {
-    if (new Date(s.start) < now) return pastColor;
-    const inActive  = activeSet.has(s.start);
-    const inPreview = previewSet.has(s.start);
-    if (inActive  && inPreview)  return bothColor;
-    if (inActive)                return activeColor;
-    if (inPreview)               return previewColor;
+  // Scriptable backgroundColor — "both" slots get a split green|indigo gradient
+  const bgColors = (ctx) => {
+    const slot = basePlan[ctx.dataIndex];
+    if (!slot) return defaultColor;
+    if (new Date(slot.start) < now) return pastColor;
+    const inActive  = activeSet.has(slot.start);
+    const inPreview = previewSet.has(slot.start);
+    if (inActive && inPreview) {
+      // Build a left-right 50/50 gradient using the bar's actual pixel coords
+      try {
+        const bar = ctx.chart.getDatasetMeta(0).data[ctx.dataIndex];
+        if (bar) {
+          const { x, width } = bar.getProps(["x", "width"], true);
+          const grad = ctx.chart.ctx.createLinearGradient(x - width / 2, 0, x + width / 2, 0);
+          grad.addColorStop(0,   activeColor);
+          grad.addColorStop(0.5, activeColor);
+          grad.addColorStop(0.5, previewColor);
+          grad.addColorStop(1,   previewColor);
+          return grad;
+        }
+      } catch {}
+      return activeColor; // fallback before first draw
+    }
+    if (inActive)  return activeColor;
+    if (inPreview) return previewColor;
     return defaultColor;
-  });
+  };
 
   const labels   = basePlan.map(s => fmtTime(s.start));
   const epData   = basePlan.map(s => parseFloat((s.ep ?? 0).toFixed(3)));
@@ -589,7 +606,12 @@ function renderTimeline(overridePlan) {
         tooltip: { callbacks: { label: ctx => {
           if (ctx.datasetIndex !== 0) return `SoC: ${ctx.raw}%`;
           const start = basePlan[ctx.dataIndex]?.start;
-          const tag = activeSet.has(start) ? " ✓ current" : previewSet.has(start) ? " → new plan" : "";
+          const inActive  = activeSet.has(start);
+          const inPreview = previewSet.has(start);
+          const tag = (inActive && inPreview) ? " ✓ both plans"
+                    : inActive  ? " ✓ current"
+                    : inPreview ? " → new plan"
+                    : "";
           return `${ctx.raw} DKK/kWh${tag}`;
         }}},
       },
