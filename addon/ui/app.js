@@ -649,7 +649,7 @@ function renderModeGrid() {
     const cs2 = { ...(state.carSettings[state.selectedPlanCar] ?? {}), mode: btn.dataset.mode };
     state.carSettings[state.selectedPlanCar] = cs2;
     await api("POST", `/api/car/${state.selectedPlanCar}/settings`, cs2);
-    renderModes(); renderModeSettings();
+    renderModeGrid(); renderModeSettings();
     loadAndRenderPreview();
   }));
 }
