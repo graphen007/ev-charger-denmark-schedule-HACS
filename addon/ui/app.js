@@ -592,7 +592,7 @@ function renderModeGrid() {
     const cs2 = { ...(state.carSettings[state.selectedPlanCar] ?? {}), mode: btn.dataset.mode };
     state.carSettings[state.selectedPlanCar] = cs2;
     await api("POST", `/api/car/${state.selectedPlanCar}/settings`, cs2);
-    await loadStatus();
+    renderModes(); renderModeSettings();  // update UI only — plan stays until Execute
   }));
 }
 
@@ -634,7 +634,7 @@ function renderModeSettings() {
       const cs2 = { ...(state.carSettings[state.selectedPlanCar] ?? {}), [inp.dataset.key]: parseFloat(inp.value) };
       state.carSettings[state.selectedPlanCar] = cs2;
       await api("POST", `/api/car/${state.selectedPlanCar}/settings`, cs2);
-      await loadStatus();
+      // No plan rebuild — press "Apply Plan" to update the schedule
     });
   });
   el.querySelector("#sr-max_price_cap")?.addEventListener("change", async e => {
@@ -642,25 +642,25 @@ function renderModeSettings() {
     const cs2 = { ...(state.carSettings[state.selectedPlanCar] ?? {}), max_price_cap: isNaN(val) ? 0 : val };
     state.carSettings[state.selectedPlanCar] = cs2;
     await api("POST", `/api/car/${state.selectedPlanCar}/settings`, cs2);
-    await loadStatus();
+    renderModeSettings();
   });
   el.querySelector("#sr-cap-clear")?.addEventListener("click", async () => {
     const cs2 = { ...(state.carSettings[state.selectedPlanCar] ?? {}), max_price_cap: 0 };
     state.carSettings[state.selectedPlanCar] = cs2;
     await api("POST", `/api/car/${state.selectedPlanCar}/settings`, cs2);
-    await loadStatus();
+    renderModeSettings();
   });
   el.querySelector("#sr-deadline_time")?.addEventListener("change", async e => {
     const cs2 = { ...(state.carSettings[state.selectedPlanCar] ?? {}), deadline_time: e.target.value };
     state.carSettings[state.selectedPlanCar] = cs2;
     await api("POST", `/api/car/${state.selectedPlanCar}/settings`, cs2);
-    await loadStatus();
+    renderModeSettings();
   });
   el.querySelector("#sr-deadline-clear")?.addEventListener("click", async () => {
     const cs2 = { ...(state.carSettings[state.selectedPlanCar] ?? {}), deadline_time: "" };
     state.carSettings[state.selectedPlanCar] = cs2;
     await api("POST", `/api/car/${state.selectedPlanCar}/settings`, cs2);
-    await loadStatus();
+    renderModeSettings();
   });
 }
 
@@ -1053,14 +1053,16 @@ document.addEventListener("DOMContentLoaded", () => {
   });
 
   document.getElementById("btn-execute").addEventListener("click", async () => {
+    const btn = document.getElementById("btn-execute");
     const result = document.getElementById("execute-result");
-    btn.disabled = true; btn.textContent = "Running...";
+    btn.disabled = true; btn.textContent = "Applying...";
     try {
       const r = await api("POST", `/api/execute/${state.selectedPlanCar}`);
       result.textContent = r.result ?? "Done"; result.className = "execute-result success";
+      await loadStatus();  // refresh plan view after apply
     } catch (e) {
       result.textContent = e.message; result.className = "execute-result error";
-    } finally { btn.disabled = false; btn.textContent = "Execute plan now"; }
+    } finally { btn.disabled = false; btn.textContent = "Apply Plan"; }
   });
 
   document.getElementById("plan-car-select").addEventListener("change", async e => {

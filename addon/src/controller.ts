@@ -397,6 +397,9 @@ export class Controller {
     // Refresh car data first so we read the latest SoC/plug state
     await this.refreshCarData(car);
 
+    // Rebuild plan from latest saved settings before executing
+    this.rebuildPlan(car);
+
     const settings = getCarSettings(carId);
 
     // Re-read plug state from HA directly so we always have the latest value.
