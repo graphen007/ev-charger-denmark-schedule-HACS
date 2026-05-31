@@ -215,7 +215,7 @@ function carColorIdx(carId) {
   return idx >= 0 ? idx % CAR_COLORS.length : 0;
 }
 
-
+function renderForecastBanner() {
   const f = state.forecast;
   const banner = document.getElementById("forecast-banner");
   if (!f || !banner) return;
@@ -1023,9 +1023,7 @@ document.addEventListener("DOMContentLoaded", () => {
     await api("POST", "/api/refresh"); await loadAll();
   });
 
-.addEventListener("click", async () => {
-    if (!state.selectedPlanCar) return;
-    const btn = document.getElementById("btn-execute");
+  document.getElementById("btn-execute").addEventListener("click", async () => {
     const result = document.getElementById("execute-result");
     btn.disabled = true; btn.textContent = "Running...";
     try {
