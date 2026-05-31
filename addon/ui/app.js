@@ -80,7 +80,11 @@ function setStatus(msg, ok = false) {
 async function api(method, path, body) {
   const opts = { method, headers: { "Content-Type": "application/json" } };
   if (body) opts.body = JSON.stringify(body);
+  const t0 = performance.now();
   const res = await fetch(`${BASE_URL}${path}`, opts);
+  const ms = Math.round(performance.now() - t0);
+  const style = ms > 1000 ? "color:red;font-weight:bold" : ms > 300 ? "color:orange" : "color:green";
+  console.log(`%c[API] ${method} ${path} → ${res.status} in ${ms}ms`, style);
   if (!res.ok) throw new Error(`${method} ${path} -> ${res.status}`);
   return res.json();
 }

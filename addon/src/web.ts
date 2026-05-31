@@ -16,6 +16,17 @@ export function createWebServer(controller: Controller, ha: HaClient) {
   const app = express();
   app.use(express.json());
 
+  // Request timing — logs every request so we can tell if slowness is server-side or ingress
+  app.use((req: Request, res: Response, next: NextFunction) => {
+    const t0 = Date.now();
+    res.on("finish", () => {
+      const ms = Date.now() - t0;
+      const flag = ms > 1000 ? " ⚠️ SLOW" : ms > 300 ? " ⚡ warn" : "";
+      console.log(`[web] ${req.method} ${req.path} → ${res.statusCode} in ${ms}ms${flag}`);
+    });
+    next();
+  });
+
   // Serve UI with no-cache for index.html so updates are always picked up
   const uiDir = path.resolve(__dirname, "../ui");
   app.use(express.static(uiDir, { etag: true, lastModified: true }));
