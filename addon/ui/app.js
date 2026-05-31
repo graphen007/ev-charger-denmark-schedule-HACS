@@ -521,6 +521,16 @@ function fmtTime(iso) {
 
 // ---- Event listeners ----
 document.addEventListener("DOMContentLoaded", () => {
+  // Dark mode toggle
+  const html = document.documentElement;
+  const saved = localStorage.getItem("ev-theme");
+  if (saved) html.dataset.theme = saved;
+  document.getElementById("theme-toggle").addEventListener("click", () => {
+    const isDark = html.dataset.theme === "dark";
+    html.dataset.theme = isDark ? "light" : "dark";
+    localStorage.setItem("ev-theme", html.dataset.theme);
+  });
+
   document.querySelectorAll(".nav-link").forEach(link => {
     link.addEventListener("click", e => {
       e.preventDefault();
