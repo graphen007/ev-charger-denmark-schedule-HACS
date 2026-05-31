@@ -1,15 +1,16 @@
 /**
- * Car settings manager — cross-user, cross-device persistence.
+ * Car settings manager — persistent, cross-user, cross-device.
  *
- * PRIMARY:   HA state machine via /api/states/ — shared across ALL users and
- *            devices in real-time via HA's WebSocket broadcast.
- * FALLBACK:  localStorage — survives HA restarts on the same device.
- *
- * Load is synchronous (reads hass.states directly, no async needed).
- * Save is async (POSTs to HA REST, also writes localStorage immediately).
+ * Storage strategy (in order of preference):
+ *  1. input_text.ev_settings_{carId} helper — created once via HA config API,
+ *     stored in .storage/input_text, survives HA restarts, shared across all users.
+ *  2. /api/states/ write — transient but instant cross-user WS broadcast (fallback
+ *     when the helper hasn't been created yet).
+ *  3. localStorage — same-device fallback for HA restart recovery.
  */
 
 const STORAGE_PREFIX = "ev_smart_charging_";
+const ENTITY_PREFIX  = "input_text.ev_settings_";
 
 const DEFAULT_SETTINGS = {
   mode: "Cheapest Hours",
@@ -21,18 +22,44 @@ const DEFAULT_SETTINGS = {
   manual_soc: 20,
 };
 
-/** Loads settings — reads from hass.states (shared) then localStorage fallback. */
+/**
+ * Ensures a persistent input_text helper exists for a car.
+ * Creates it via the HA helpers config API if missing.
+ * Returns true if the entity now exists (or already did).
+ */
+async function ensurePersistentHelper(hass, carId) {
+  const entityId = `${ENTITY_PREFIX}${carId}`;
+  if (hass.states[entityId]) return true;
+  try {
+    await hass.callApi("POST", "config/input_text/config", {
+      id:      `ev_settings_${carId}`,
+      name:    `EV Settings ${carId}`,
+      max:     255,
+      initial: "",
+    });
+    return true;
+  } catch (e) {
+    // May already exist (409) or API unavailable — not fatal
+    if (!e?.message?.includes("409")) {
+      console.warn("[ev-charging] Could not create input_text helper:", e?.message);
+    }
+    return !!hass.states[entityId];
+  }
+}
+
+/** Loads settings synchronously from hass.states, falls back to localStorage. */
 export function loadCarSettings(hass, carId) {
-  const entityId = `input_text.ev_settings_${carId}`;
+  const entityId = `${ENTITY_PREFIX}${carId}`;
   const raw = hass?.states[entityId]?.state;
   if (raw && raw !== "unknown" && raw !== "unavailable") {
     try {
       const parsed = JSON.parse(raw);
+      // Keep localStorage in sync as a restart-recovery cache
       try { localStorage.setItem(`${STORAGE_PREFIX}${carId}`, raw); } catch {}
       return { ...DEFAULT_SETTINGS, ...parsed };
     } catch {}
   }
-  // Fallback: localStorage (persists across HA restarts)
+  // Fallback: localStorage (same device — survives HA restart)
   try {
     const local = localStorage.getItem(`${STORAGE_PREFIX}${carId}`);
     if (local) return { ...DEFAULT_SETTINGS, ...JSON.parse(local) };
@@ -40,17 +67,31 @@ export function loadCarSettings(hass, carId) {
   return { ...DEFAULT_SETTINGS };
 }
 
-/** Saves settings — writes localStorage instantly, then pushes to HA state machine. */
+/** Saves settings persistently. Writes localStorage instantly, then syncs to HA. */
 export async function saveCarSettings(hass, carId, settings) {
-  const entityId = `input_text.ev_settings_${carId}`;
+  const entityId = `${ENTITY_PREFIX}${carId}`;
   const json = JSON.stringify(settings);
-  // Instant local write
+
+  // Immediate local write for instant UI feedback
   try { localStorage.setItem(`${STORAGE_PREFIX}${carId}`, json); } catch {}
-  // Push to HA — broadcasts to all users/devices via WebSocket
+
+  // Ensure the persistent helper exists, then set its value
+  const helperReady = await ensurePersistentHelper(hass, carId);
+  if (helperReady) {
+    try {
+      // input_text.set_value persists to .storage/input_text — survives HA restarts
+      await hass.callService("input_text", "set_value", { entity_id: entityId, value: json });
+      return;
+    } catch (e) {
+      console.warn("[ev-charging] input_text.set_value failed, falling back:", e?.message);
+    }
+  }
+
+  // Fallback: states API (transient but cross-user via WS broadcast)
   try {
     await hass.callApi("POST", `states/${entityId}`, { state: json });
   } catch (e) {
-    console.warn("[ev-charging] Could not save to HA states:", e?.message);
+    console.warn("[ev-charging] Could not save settings:", e?.message);
   }
 }
 
