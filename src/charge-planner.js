@@ -115,13 +115,15 @@ export function buildChargePlan(slots, mode, settings, tariffs) {
  * Summary stats over future charging slots only.
  */
 export function planSummary(plan, settings) {
-  const { current_soc = 20, battery_kwh = 71.2, charge_kw = 9.5 } = settings;
+  const { current_soc = 20, battery_kwh = 71.2, charge_kw = 9.5, charge_limit = 100 } = settings;
   const chargingSlots = plan.filter((s) => s.charging && !s.isPast);
 
   const max_possible_kwh = (chargingSlots.length / 4) * charge_kw;
-  const remaining_kwh = battery_kwh * (1 - current_soc / 100);
+  // Cap at whichever is lower: charge limit or full battery
+  const effective_limit = Math.min(charge_limit, 100);
+  const remaining_kwh = battery_kwh * (Math.max(0, effective_limit - current_soc) / 100);
   const kwh_added = Math.min(max_possible_kwh, remaining_kwh);
-  const final_soc = Math.min(100, current_soc + (kwh_added / battery_kwh) * 100);
+  const final_soc = Math.min(effective_limit, current_soc + (kwh_added / battery_kwh) * 100);
 
   // Cost: only pay for kWh actually added. Use cheapest slots first (they were already selected as cheapest).
   const utilization = max_possible_kwh > 0 ? kwh_added / max_possible_kwh : 0;
