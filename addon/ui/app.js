@@ -9,9 +9,8 @@ const BASE_URL = (() => {
 
 const MODES = [
   { id: "Charge Now",       desc: "Start immediately" },
-  { id: "Cheapest Hours",   desc: "Cheapest N hours today" },
+  { id: "Cheapest Hours",   desc: "Cheapest slots to reach target SoC" },
   { id: "Below Threshold",  desc: "When price is below ceiling" },
-  { id: "Departure Plan",   desc: "Ready by departure time" },
   { id: "Solar Surplus",    desc: "When solar produces surplus" },
   { id: "Off",              desc: "Manual override off" },
 ];
@@ -509,17 +508,22 @@ function renderModeSettings() {
   if (!mode || mode === "Charge Now" || mode === "Off" || mode === "Solar Surplus") { card.style.display = "none"; return; }
   card.style.display = "";
   let html = "";
-  if (mode === "Cheapest Hours")   html += slider("target_soc",       "Target SoC",          cs.target_soc      ?? 80,   10,  100, 5,    "%");
-  if (mode === "Below Threshold")  html += slider("price_threshold", "Price ceiling",        cs.price_threshold ?? 0.5,  0.1, 5.0, 0.05, "DKK/kWh");
-  if (mode === "Departure Plan") {
-    html += `<div class="setting-row"><label>Departure time</label><input type="time" id="sr-departure_time" value="${cs.departure_time ?? "07:00"}" /></div>`;
-    html += slider("target_soc", "Target SoC at departure", cs.target_soc ?? 80, 30, 100, 5, "%");
+  if (mode === "Cheapest Hours") {
+    html += slider("target_soc", "Target SoC", cs.target_soc ?? 80, 10, 100, 5, "%");
+    const dl = cs.deadline_time ?? "";
+    html += `<div class="setting-row">
+      <label>Deadline <span class="setting-hint">(optional — reach target by this time)</span></label>
+      <div style="display:flex;gap:.5rem;align-items:center">
+        <input type="time" id="sr-deadline_time" value="${dl}" style="flex:1" />
+        ${dl ? `<button class="btn-sm" id="sr-deadline-clear">Clear</button>` : ""}
+      </div>
+    </div>`;
   }
+  if (mode === "Below Threshold")  html += slider("price_threshold", "Price ceiling", cs.price_threshold ?? 0.5, 0.1, 5.0, 0.05, "DKK/kWh");
   html += slider("charge_limit", "AC charge limit", cs.charge_limit ?? 100, 50, 100, 5, "%");
   el.innerHTML = html;
   el.querySelectorAll("input[type=range]").forEach(inp => {
     inp.addEventListener("input", async () => {
-      inp.previousElementSibling?.querySelector(".slider-val") && (inp.previousElementSibling.querySelector(".slider-val").textContent = `${inp.value}${inp.dataset.unit}`);
       const lbl = inp.closest(".setting-row").querySelector(".slider-val");
       if (lbl) lbl.textContent = `${inp.value}${inp.dataset.unit}`;
       const cs2 = { ...(state.carSettings[state.selectedPlanCar] ?? {}), [inp.dataset.key]: parseFloat(inp.value) };
@@ -528,8 +532,14 @@ function renderModeSettings() {
       await loadStatus();
     });
   });
-  el.querySelector("#sr-departure_time")?.addEventListener("change", async e => {
-    const cs2 = { ...(state.carSettings[state.selectedPlanCar] ?? {}), departure_time: e.target.value };
+  el.querySelector("#sr-deadline_time")?.addEventListener("change", async e => {
+    const cs2 = { ...(state.carSettings[state.selectedPlanCar] ?? {}), deadline_time: e.target.value };
+    state.carSettings[state.selectedPlanCar] = cs2;
+    await api("POST", `/api/car/${state.selectedPlanCar}/settings`, cs2);
+    await loadStatus();
+  });
+  el.querySelector("#sr-deadline-clear")?.addEventListener("click", async () => {
+    const cs2 = { ...(state.carSettings[state.selectedPlanCar] ?? {}), deadline_time: "" };
     state.carSettings[state.selectedPlanCar] = cs2;
     await api("POST", `/api/car/${state.selectedPlanCar}/settings`, cs2);
     await loadStatus();

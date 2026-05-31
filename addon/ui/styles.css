@@ -395,6 +395,7 @@ html, body {
 .btn-danger { color: var(--red); border-color: var(--red); }
 .btn-danger:hover { background: #fff5f5; }
 .btn-sm { padding: 4px 12px; font-size: 0.75rem; }
+.setting-hint { font-size: 0.75rem; color: var(--gray-400); font-weight: 400; }
 .btn-text { background: none; border: none; color: var(--gray-600); cursor: pointer; font-size: 0.82rem; padding: 4px 0; text-decoration: underline; }
 .btn-text:hover { color: var(--black); }
 .btn:disabled { opacity: 0.4; cursor: not-allowed; }

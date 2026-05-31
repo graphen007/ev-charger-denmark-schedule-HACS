@@ -59,10 +59,10 @@ export interface CarConfig {
 }
 
 export interface CarSettings {
-  mode: "Charge Now" | "Cheapest Hours" | "Below Threshold" | "Departure Plan" | "Solar Surplus" | "Off";
+  mode: "Charge Now" | "Cheapest Hours" | "Below Threshold" | "Solar Surplus" | "Off";
   price_threshold: number;
   cheapest_hours: number;
-  departure_time: string;
+  deadline_time: string;     // optional "HH:MM" — reach target_soc by this time (Cheapest Hours)
   target_soc: number;
   charge_limit: number;
   manual_soc: number;
@@ -72,7 +72,7 @@ export const DEFAULT_CAR_SETTINGS: CarSettings = {
   mode:             "Cheapest Hours",
   price_threshold:  0.50,
   cheapest_hours:   4,
-  departure_time:   "07:00",
+  deadline_time:    "",
   target_soc:       80,
   charge_limit:     100,
   manual_soc:       20,
@@ -121,41 +121,36 @@ export function buildChargePlan(
 
   const future = expanded.filter((s) => s.localDate >= now);
   const charging = new Set<string>();
-  const { mode, cheapest_hours, price_threshold, departure_time, target_soc, charge_limit } = settings;
+  const { mode, price_threshold, deadline_time, target_soc, charge_limit } = settings;
 
   if (mode === "Charge Now") {
     future.forEach((s) => charging.add(s.start));
 
   } else if (mode === "Cheapest Hours") {
-    // Calculate how many slots are needed to reach target_soc from current SoC
     const targetSocActual = Math.min(target_soc, charge_limit);
     const neededKwh = Math.max(0, ((targetSocActual - currentSoc) / 100) * batterKwh);
     const slotsNeeded = Math.ceil((neededKwh / chargeKw) * 4);
     if (slotsNeeded > 0) {
-      [...future].sort((a, b) => a.ep - b.ep).slice(0, slotsNeeded).forEach((s) => charging.add(s.start));
+      // If a deadline is set, only schedule slots before that time
+      let window = future;
+      if (deadline_time) {
+        const [dlH, dlM] = deadline_time.split(":").map(Number);
+        const dl = new Date();
+        dl.setHours(dlH, dlM, 0, 0);
+        if (dl <= now) dl.setDate(dl.getDate() + 1);
+        window = future.filter((s) => s.localDate < dl);
+      }
+      // If window is smaller than needed, use all of it; otherwise pick cheapest
+      const pick = window.length <= slotsNeeded ? window : [...window].sort((a, b) => a.ep - b.ep).slice(0, slotsNeeded);
+      pick.forEach((s) => charging.add(s.start));
     }
 
   } else if (mode === "Below Threshold") {
     future.filter((s) => s.ep <= price_threshold).forEach((s) => charging.add(s.start));
 
-  } else if (mode === "Departure Plan") {
-    const [depH, depM] = departure_time.split(":").map(Number);
-    const dep = new Date();
-    dep.setHours(depH, depM, 0, 0);
-    if (dep <= now) dep.setDate(dep.getDate() + 1);
-    const neededKwh = Math.max(0, ((Math.min(target_soc, charge_limit) - currentSoc) / 100) * batterKwh);
-    const slotsNeeded = Math.ceil((neededKwh / chargeKw) * 4);
-    const window = future.filter((s) => s.localDate < dep);
-    if (slotsNeeded > 0) {
-      const pick = window.length <= slotsNeeded ? window : [...window].sort((a, b) => a.ep - b.ep).slice(0, slotsNeeded);
-      pick.forEach((s) => charging.add(s.start));
-    }
-
   } else if (mode === "Solar Surplus") {
-    // Mark slots where solar surplus > 80% of charge rate as charging
-    // Real-time check is done by controller — here we just schedule based on current surplus
     if (solarSurplusKw >= chargeKw * 0.8) {
-      future.slice(0, 4).forEach((s) => charging.add(s.start)); // charge next hour if surplus now
+      future.slice(0, 4).forEach((s) => charging.add(s.start));
     }
   }
   // "Off" → nothing charged
