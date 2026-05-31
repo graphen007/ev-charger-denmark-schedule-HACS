@@ -587,3 +587,7 @@ html[data-theme="dark"] .tl-idle   { background: var(--gray-700); }
   html:not([data-theme="light"]) .tl-past  { background: var(--gray-700); }
   html:not([data-theme="light"]) .tl-idle  { background: var(--gray-700); }
 }
+
+/* ===== Savings ===== */
+.stat-card.saved .stat-value { color: var(--green); }
+.saved-value { color: var(--green); font-weight: 600; }

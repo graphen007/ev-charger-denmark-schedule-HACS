@@ -203,7 +203,8 @@ function renderPriceChart() {
 
   const now = new Date();
   const tariffs = state.settings?.tariffs ?? {};
-  const planSlots = state.status?.[0]?.plan ?? [];
+  const carStatus = state.status?.[0];
+  const planSlots = carStatus?.plan ?? [];
   const chargingSet = new Set(planSlots.filter(s => s.charging).map(s => s.start));
 
   const slots = state.prices.map(s => {
@@ -218,22 +219,50 @@ function renderPriceChart() {
     return defaultColor;
   });
 
+  // SoC projection: aggregate 15-min plan sub-slots into hourly buckets matching price slots
+  const carConfig = state.settings?.cars?.find(c => c.id === carStatus?.carId);
+  const batteryKwh = carConfig?.battery_kwh ?? 71.2;
+  const chargeKw   = carConfig?.charge_kw   ?? 9.5;
+  const chargeLimit = state.carSettings[carStatus?.carId]?.charge_limit ?? 100;
+  let soc = carStatus?.soc ?? null;
+  const socData = soc != null ? slots.map(s => {
+    if (s.dt < now) return null;
+    const slotEnd = new Date(s.dt.getTime() + 3600000);
+    const chargingSubSlots = planSlots.filter(p => {
+      const pDt = new Date(p.start);
+      return pDt >= s.dt && pDt < slotEnd && p.charging;
+    }).length;
+    soc = Math.min(chargeLimit, soc + chargingSubSlots * (chargeKw * 0.25 / batteryKwh * 100));
+    return parseFloat(soc.toFixed(1));
+  }) : null;
+
+  const lineColor = isDark ? "rgba(129,140,248,0.9)" : "rgba(99,102,241,0.85)";
+  const datasets = [
+    { type: "bar", data: epData, backgroundColor: bgColors, borderRadius: 2, borderSkipped: false, yAxisID: "y" },
+  ];
+  if (socData) datasets.push({
+    type: "line", data: socData, borderColor: lineColor, backgroundColor: "transparent",
+    borderWidth: 2, pointRadius: 0, tension: 0.3, yAxisID: "y2", spanGaps: false,
+  });
+
   if (priceChart) priceChart.destroy();
   priceChart = new Chart(canvas, {
-    type: "bar",
     data: {
       labels: slots.map(s => fmtTime(s.start)),
-      datasets: [{ data: epData, backgroundColor: bgColors, borderRadius: 2, borderSkipped: false }],
+      datasets,
     },
     options: {
       responsive: true, maintainAspectRatio: false,
       plugins: {
         legend: { display: false },
-        tooltip: { callbacks: { label: ctx => `${ctx.raw} DKK/kWh${chargingSet.has(slots[ctx.dataIndex].start) ? " — charging" : ""}` } }
+        tooltip: { callbacks: { label: ctx => ctx.datasetIndex === 0
+          ? `${ctx.raw} DKK/kWh${chargingSet.has(slots[ctx.dataIndex].start) ? " — charging" : ""}`
+          : `SoC: ${ctx.raw}%` } },
       },
       scales: {
-        x: { ticks: { maxTicksLimit: 12, color: textColor, font: { size: 11 } }, grid: { display: false } },
-        y: { ticks: { color: textColor, font: { size: 11 } }, grid: { color: gridColor } },
+        x:  { ticks: { maxTicksLimit: 12, color: textColor, font: { size: 11 } }, grid: { display: false } },
+        y:  { ticks: { color: textColor, font: { size: 11 } }, grid: { color: gridColor } },
+        y2: socData ? { position: "right", min: 0, max: 100, ticks: { color: lineColor, font: { size: 10 }, callback: v => `${v}%` }, grid: { display: false } } : undefined,
       },
       animation: { duration: 200 },
     },
@@ -284,26 +313,95 @@ function renderPriceStrip() {
 function renderSmartTip() {
   const tipEl = document.getElementById("smart-tip");
   const container = document.getElementById("smart-actions");
-  if (!tipEl || !state.prices.length || !state.status.length) { container.style.display = "none"; return; }
+  if (!tipEl || !container) return;
+  if (!state.prices.length || !state.status.length) { container.style.display = "none"; return; }
   const now = new Date();
   const tariffs = state.settings?.tariffs ?? {};
+  const carId = state.status[0]?.carId;
+  const cs = state.carSettings[carId] ?? {};
   const todayEps = state.prices
     .filter(s => new Date(s.start).toDateString() === now.toDateString())
-    .map(s => ({ ep: computeEp(s.value, new Date(s.start), tariffs), start: s.start, dt: new Date(s.start) }));
+    .map(s => ({ ep: computeEp(s.value, new Date(s.start), tariffs), dt: new Date(s.start) }));
   const sorted = [...todayEps].sort((a, b) => a.ep - b.ep);
   const p25 = sorted[Math.floor(sorted.length * 0.25)]?.ep;
   const current = todayEps.find(s => s.dt <= now && now < new Date(s.dt.getTime() + 3600000));
-  const cs = state.carSettings[state.status[0]?.carId] ?? {};
-  let tip = "";
+
+  const tips = [];
   if (current && cs.mode !== "Charge Now" && current.ep <= (p25 ?? Infinity))
-    tip = `Current price (${current.ep.toFixed(2)} DKK/kWh) is in the cheapest 25% today.`;
-  else if (cs.mode === "Off" && sorted[0])
-    tip = `Cheapest slot today is ${fmtTime(sorted[0].start)} at ${sorted[0].ep.toFixed(2)} DKK/kWh.`;
-  if (tip) { tipEl.textContent = tip; container.style.display = ""; }
-  else container.style.display = "none";
+    tips.push(`Current price (${current.ep.toFixed(2)} DKK/kWh) is in the cheapest 25% today.`);
+
+  if (cs.mode !== "Charge Now" && cs.mode !== "Off") {
+    const win = getBestWindowTonight(carId);
+    if (win) {
+      const fmt = dt => dt.toLocaleTimeString("da-DK", { hour: "2-digit", minute: "2-digit" });
+      tips.push(`Best window tonight: ${fmt(win.startDt)}–${fmt(win.endDt)}, avg ${win.avgEp.toFixed(2)} DKK/kWh, est. cost ~${win.estCost.toFixed(2)} DKK`);
+    }
+  }
+
+  if (tips.length) {
+    tipEl.innerHTML = tips.map(t => `<div>${t}</div>`).join("");
+    container.style.display = "";
+  } else {
+    container.style.display = "none";
+  }
 }
 
-// ---- Plan view ----
+// ---- SoC projection helper ----
+// Returns array of projected SoC values (null for past slots) aligned with planSlots.
+function computeSocProjection(carStatus, planSlots) {
+  if (!carStatus || carStatus.soc == null || !planSlots.length) return null;
+  const carConfig = state.settings?.cars?.find(c => c.id === carStatus.carId);
+  const batteryKwh = carConfig?.battery_kwh ?? 71.2;
+  const chargeKw   = carConfig?.charge_kw   ?? 9.5;
+  const chargeLimit = state.carSettings[carStatus.carId]?.charge_limit ?? 100;
+  const now = new Date();
+  let soc = carStatus.soc;
+  return planSlots.map(s => {
+    const dt = new Date(s.start);
+    if (dt < now) return null;
+    if (s.charging) soc = Math.min(chargeLimit, soc + (chargeKw * 0.25 / batteryKwh * 100));
+    return parseFloat(soc.toFixed(1));
+  });
+}
+
+// Returns the cheapest upcoming window tonight for the given car.
+function getBestWindowTonight(carId) {
+  if (!state.prices.length) return null;
+  const now = new Date();
+  const tariffs = state.settings?.tariffs ?? {};
+  const cs = state.carSettings[carId] ?? {};
+  const hours = cs.cheapest_hours ?? 4;
+  const cutoff = new Date(now); cutoff.setDate(cutoff.getDate() + 1); cutoff.setHours(6, 0, 0, 0);
+  const future = state.prices
+    .filter(s => { const dt = new Date(s.start); return dt >= now && dt < cutoff; })
+    .map(s => ({ ep: computeEp(s.value, new Date(s.start), tariffs), dt: new Date(s.start) }));
+  if (future.length < 4) return null;
+  const nSlots = Math.min(hours * 4, future.length);
+  const cheapest = [...future].sort((a, b) => a.ep - b.ep).slice(0, nSlots).sort((a, b) => a.dt - b.dt);
+  const startDt = cheapest[0].dt;
+  const endDt   = new Date(cheapest[cheapest.length - 1].dt.getTime() + 15 * 60000);
+  const avgEp   = cheapest.reduce((sum, s) => sum + s.ep, 0) / cheapest.length;
+  const carConfig  = state.settings?.cars?.find(c => c.id === carId);
+  const chargeKw   = carConfig?.charge_kw   ?? 9.5;
+  const batteryKwh = carConfig?.battery_kwh ?? 71.2;
+  const carStatus  = state.status.find(c => c.carId === carId);
+  const currentSoc = carStatus?.soc ?? cs.manual_soc ?? 20;
+  const kwhNeeded  = Math.min(chargeKw * hours, Math.max(0, (cs.charge_limit ?? 100 - currentSoc) / 100 * batteryKwh));
+  return { startDt, endDt, avgEp, kwhNeeded, estCost: kwhNeeded * avgEp };
+}
+
+// Approximate what a session would have cost at the peak tariff rate for that month.
+function peakRateApprox(startTime) {
+  const dt = new Date(startTime);
+  const m = dt.getMonth() + 1;
+  const isSummer = m >= 4 && m <= 9;
+  const tariffs = state.settings?.tariffs ?? DEFAULT_TARIFFS;
+  const peakN1 = isSummer ? (tariffs.peak_summer ?? DEFAULT_TARIFFS.peak_summer) : (tariffs.peak_winter ?? DEFAULT_TARIFFS.peak_winter);
+  // Use a conservative spot estimate of 0.6 DKK/kWh
+  return 0.6 * 1.25 + peakN1 + (tariffs.energinet ?? DEFAULT_TARIFFS.energinet) + (tariffs.elafgift ?? DEFAULT_TARIFFS.elafgift) + (tariffs.supplier ?? DEFAULT_TARIFFS.supplier);
+}
+
+
 function renderPlan() {
   renderPlanCarSelect(); renderModeGrid(); renderModeSettings(); renderPlanEstimate(); renderTimeline(); renderScheduleTable();
 }
@@ -340,22 +438,36 @@ function renderTimeline() {
     return defaultColor;
   });
 
+  const carStatus = state.status.find(c => c.carId === state.selectedPlanCar);
+  const socData = computeSocProjection(carStatus, plan);
+  const lineColor = isDark ? "rgba(129,140,248,0.9)" : "rgba(99,102,241,0.85)";
+
+  const datasets = [
+    { type: "bar", data: plan.map(s => parseFloat((s.ep ?? 0).toFixed(3))), backgroundColor: bgColors, borderRadius: 2, borderSkipped: false, yAxisID: "y" },
+  ];
+  if (socData) datasets.push({
+    type: "line", data: socData, borderColor: lineColor, backgroundColor: "transparent",
+    borderWidth: 2, pointRadius: 0, tension: 0.3, yAxisID: "y2", spanGaps: false,
+  });
+
   if (planChart) planChart.destroy();
   planChart = new Chart(canvas, {
-    type: "bar",
     data: {
       labels: plan.map(s => fmtTime(s.start)),
-      datasets: [{ data: plan.map(s => parseFloat((s.ep ?? 0).toFixed(3))), backgroundColor: bgColors, borderRadius: 2, borderSkipped: false }],
+      datasets,
     },
     options: {
       responsive: true, maintainAspectRatio: false,
       plugins: {
         legend: { display: false },
-        tooltip: { callbacks: { label: ctx => `${ctx.raw} DKK/kWh${chargingSet.has(plan[ctx.dataIndex].start) ? " — charging" : ""}` } },
+        tooltip: { callbacks: { label: ctx => ctx.datasetIndex === 0
+          ? `${ctx.raw} DKK/kWh${chargingSet.has(plan[ctx.dataIndex].start) ? " — charging" : ""}`
+          : `SoC: ${ctx.raw}%` } },
       },
       scales: {
-        x: { ticks: { maxTicksLimit: 12, color: textColor, font: { size: 11 } }, grid: { display: false } },
-        y: { ticks: { color: textColor, font: { size: 11 } }, grid: { color: gridColor } },
+        x:  { ticks: { maxTicksLimit: 12, color: textColor, font: { size: 11 } }, grid: { display: false } },
+        y:  { ticks: { color: textColor, font: { size: 11 } }, grid: { color: gridColor } },
+        y2: socData ? { position: "right", min: 0, max: 100, ticks: { color: lineColor, font: { size: 10 }, callback: v => `${v}%` }, grid: { display: false } } : undefined,
       },
       animation: { duration: 200 },
     },
@@ -478,13 +590,18 @@ async function renderHistory() {
     });
   }
 
-  const totalKwh  = sessions.reduce((a, s) => a + (s.kwhAdded ?? 0), 0);
-  const totalCost = sessions.reduce((a, s) => a + (s.estimatedCost ?? 0), 0);
-  const avgPrice  = sessions.length ? sessions.reduce((a, s) => a + (s.avgEffectivePrice ?? 0), 0) / sessions.length : 0;
+  const totalKwh   = sessions.reduce((a, s) => a + (s.kwhAdded ?? 0), 0);
+  const totalCost  = sessions.reduce((a, s) => a + (s.estimatedCost ?? 0), 0);
+  const avgPrice   = sessions.length ? sessions.reduce((a, s) => a + (s.avgEffectivePrice ?? 0), 0) / sessions.length : 0;
+  const totalSaved = sessions.reduce((a, s) => {
+    const peak = peakRateApprox(s.startTime);
+    return a + Math.max(0, (peak - (s.avgEffectivePrice ?? peak)) * (s.kwhAdded ?? 0));
+  }, 0);
   document.getElementById("history-stats").innerHTML = `
     <div class="stat-card"><div class="stat-value">${totalKwh.toFixed(1)}</div><div class="stat-label">Total kWh</div></div>
     <div class="stat-card"><div class="stat-value">${totalCost.toFixed(0)}</div><div class="stat-label">Total DKK</div></div>
     <div class="stat-card"><div class="stat-value">${avgPrice.toFixed(2)}</div><div class="stat-label">Avg DKK/kWh</div></div>
+    <div class="stat-card saved"><div class="stat-value">${totalSaved.toFixed(0)}</div><div class="stat-label">DKK saved vs peak</div></div>
     <div class="stat-card"><div class="stat-value">${sessions.length}</div><div class="stat-label">Sessions</div></div>`;
 
   const monthly = {};
@@ -503,6 +620,8 @@ async function renderHistory() {
   document.getElementById("history-body").innerHTML = [...sessions].reverse().map(s => {
     const start = new Date(s.startTime), end = new Date(s.endTime);
     const dur = Math.round((end - start) / 60000);
+    const peak = peakRateApprox(s.startTime);
+    const saved = Math.max(0, (peak - (s.avgEffectivePrice ?? peak)) * (s.kwhAdded ?? 0));
     return `<tr>
       <td>${start.toLocaleDateString("en-GB", { day: "numeric", month: "short" })}</td>
       <td>${s.carName}</td>
@@ -510,9 +629,10 @@ async function renderHistory() {
       <td>${s.kwhAdded?.toFixed(1)}</td>
       <td>${s.estimatedCost?.toFixed(2)} DKK</td>
       <td>${s.avgEffectivePrice?.toFixed(2)}</td>
+      <td class="${saved > 0.5 ? "saved-value" : ""}">${saved > 0.1 ? `${saved.toFixed(2)} DKK` : "—"}</td>
       <td>${dur >= 60 ? `${Math.floor(dur/60)}h ${dur%60}m` : `${dur}m`}</td>
     </tr>`;
-  }).join("") || `<tr><td colspan="7" class="empty-row">No sessions yet</td></tr>`;
+  }).join("") || `<tr><td colspan="8" class="empty-row">No sessions yet</td></tr>`;
 }
 
 // ---- Settings ----
