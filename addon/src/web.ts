@@ -180,6 +180,15 @@ export function createWebServer(controller: Controller, ha: HaClient) {
     res.json({ ok: true });
   });
 
+  app.post("/api/car/:carId/refresh", async (req, res) => {
+    const { cars } = loadSettings();
+    const car = cars.find(c => c.id === req.params.carId);
+    if (!car) return res.status(404).json({ error: "Car not found" });
+    if (!car.refresh_entity) return res.status(400).json({ error: "No refresh_entity configured for this car" });
+    await controller.refreshCarData(car);
+    res.json({ ok: true });
+  });
+
   // Fallback: serve index.html for all non-API routes (SPA routing)
   app.get("*", (_req, res) => {
     res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");

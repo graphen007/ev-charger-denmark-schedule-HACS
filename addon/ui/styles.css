@@ -188,6 +188,7 @@ html, body {
 .soc-fill.high { background: var(--green); }
 .car-meta { display: flex; justify-content: space-between; font-size: 0.78rem; color: var(--gray-600); }
 .car-mode-label { font-weight: 600; color: var(--black); }
+.car-action { font-size: 0.82rem; color: var(--gray-600); margin: 4px 0 2px; min-height: 1.1em; }
 .car-estimate { font-size: 0.78rem; color: var(--gray-600); margin-top: 4px; }
 
 /* ===== Forecast bar ===== */
