@@ -94,7 +94,6 @@ export function createWebServer(controller: Controller, ha: HaClient) {
   app.get("/api/car/:carId/settings", (req, res) => res.json(getCarSettings(req.params.carId)));
   app.post("/api/car/:carId/settings", (req, res) => {
     saveCarSettings(req.params.carId, req.body);
-    controller.getAllStatus(); // trigger plan rebuild
     res.json({ ok: true });
   });
 
@@ -146,7 +145,10 @@ export function createWebServer(controller: Controller, ha: HaClient) {
   });
 
   // ---- Prices ----
-  app.get("/api/prices", (_req, res) => res.json(controller.getPriceSlots()));
+  app.get("/api/prices", (_req, res) => res.json({
+    slots: controller.getPriceSlots(),
+    error: controller.getLastPriceError(),
+  }));
 
   // ---- Forecast ----
   app.get("/api/forecast", async (_req, res) => {

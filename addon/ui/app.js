@@ -41,8 +41,8 @@ const TARIFF_LABELS = {
 let state = {
   status:          [],
   prices:          [],
+  priceError:      null,
   forecast:        null,
-  settings:        null,
   selectedPlanCar: null,
   carSettings:     {},
   haEntities:      [],
@@ -86,12 +86,17 @@ async function api(method, path, body) {
 }
 
 async function loadAll() {
-  [state.status, state.prices, state.settings, state.haEntities] = await Promise.all([
+  const [status, priceResp, settings, haEntities] = await Promise.all([
     api("GET", "/api/status"),
     api("GET", "/api/prices"),
     api("GET", "/api/settings"),
     api("GET", "/api/ha/entities"),
   ]);
+  state.status     = status;
+  state.prices     = priceResp.slots ?? priceResp;
+  state.priceError = priceResp.error ?? null;
+  state.settings   = settings;
+  state.haEntities = haEntities;
   for (const car of (state.status || [])) {
     state.carSettings[car.carId] = await api("GET", `/api/car/${car.carId}/settings`).catch(() => ({}));
   }
@@ -109,7 +114,9 @@ async function loadStatus() {
 }
 
 async function loadPrices() {
-  state.prices = await api("GET", "/api/prices");
+  const resp = await api("GET", "/api/prices");
+  state.prices = resp.slots ?? resp; // handle both old array and new {slots, error} shape
+  state.priceError = resp.error ?? null;
   renderDashboard();
 }
 
@@ -177,9 +184,10 @@ function renderPriceChart() {
   if (!canvas) return;
   if (!state.prices.length) {
     if (priceChart) { priceChart.destroy(); priceChart = null; }
+    const errMsg = state.priceError ? `<br><span style="font-size:.75rem;color:var(--red)">${state.priceError}</span>` : "";
     wrap.innerHTML = `<div style="padding:2rem;text-align:center;color:var(--gray-400);font-size:.9rem">
-      No price data.<br><span style="font-size:.8rem">Energinet API may be unavailable. Prices load automatically every hour.</span>
-      <br><br><button class="btn" onclick="document.getElementById('btn-refresh').click()">Retry now</button>
+      No price data — check HA Nord Pool integration or Energinet API.${errMsg}
+      <br><br><button class="btn" onclick="document.getElementById('btn-refresh').click()">Retry</button>
     </div><canvas id="price-chart" style="display:none"></canvas>`;
     return;
   }

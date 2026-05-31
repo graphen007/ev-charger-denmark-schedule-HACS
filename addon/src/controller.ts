@@ -19,6 +19,7 @@ interface CarState {
 export class Controller {
   private carStates = new Map<string, CarState>();
   private priceSlots: PriceSlot[] = [];
+  private lastPriceError: string | null = null;
   private broadcastFn: ((event: string, data: unknown) => void) | null = null;
 
   constructor(private ha: HaClient, private notifier: Notifier) {}
@@ -201,14 +202,58 @@ export class Controller {
     }
   }
 
+  /** Try to read today/tomorrow prices from a HA Nord Pool sensor entity.
+   *  Returns null if no suitable entity is found or HA is not connected. */
+  private fetchPricesFromHaEntities(): { today: PriceSlot[]; tomorrow: PriceSlot[] } | null {
+    if (!this.ha.isConnected()) return null;
+    const allStates = this.ha.getAllStates();
+    // Find nordpool sensor entities — they have raw_today attribute with price objects
+    const npEntity = allStates.find(e =>
+      e.entity_id.toLowerCase().includes("nordpool") &&
+      Array.isArray(e.attributes?.raw_today) &&
+      e.attributes.raw_today.length > 0,
+    );
+    if (!npEntity) return null;
+
+    console.log(`[Controller] Using HA Nord Pool entity: ${npEntity.entity_id}`);
+    // price_type "MWh" means values are DKK/MWh → divide by 1000
+    const scale = (npEntity.attributes.price_type ?? "MWh") === "MWh" ? 0.001 : 1;
+
+    type RawEntry = { start: string; value: number };
+    const toSlot = (item: RawEntry): PriceSlot => ({
+      // Strip timezone offset so it's treated as local DK time
+      start: item.start.replace(/([+-]\d{2}:\d{2}|Z)$/, ""),
+      value: item.value * scale,
+    });
+
+    const today    = (npEntity.attributes.raw_today    as RawEntry[] ?? []).map(toSlot);
+    const tomorrow = (npEntity.attributes.raw_tomorrow as RawEntry[] ?? []).map(toSlot);
+    return { today, tomorrow };
+  }
+
   /** Refresh prices and rebuild all plans. */
   async refreshPrices(): Promise<void> {
     const { area, cars } = loadSettings();
     console.log(`[Controller] Fetching prices for ${area}…`);
     try {
-      const { today, tomorrow } = await fetchPrices(area);
+      // Try HA Nord Pool entity first (more reliable inside the addon)
+      let today: PriceSlot[];
+      let tomorrow: PriceSlot[];
+      const haResult = this.fetchPricesFromHaEntities();
+      if (haResult && haResult.today.length >= 20) {
+        today    = haResult.today;
+        tomorrow = haResult.tomorrow;
+        console.log(`[Controller] Prices from HA Nord Pool: ${today.length} today + ${tomorrow.length} tomorrow`);
+      } else {
+        // Fall back to Energinet public API
+        const fetched = await fetchPrices(area);
+        today    = fetched.today;
+        tomorrow = fetched.tomorrow;
+        console.log(`[Controller] Prices from Energinet: ${today.length} today + ${tomorrow.length} tomorrow`);
+      }
+
+      this.lastPriceError = null;
       this.priceSlots = [...today, ...tomorrow];
-      console.log(`[Controller] Got ${today.length} today + ${tomorrow.length} tomorrow slots`);
 
       // Notify if tomorrow prices just arrived
       if (tomorrow.length > 0) {
@@ -233,11 +278,13 @@ export class Controller {
       }
       this.broadcast("prices_updated", { slots: this.priceSlots.length });
     } catch (e) {
-      console.error("[Controller] Price fetch failed:", (e as Error).message);
+      this.lastPriceError = (e as Error).message;
+      console.error("[Controller] Price fetch failed:", this.lastPriceError);
     }
   }
 
   getPriceSlots(): PriceSlot[] { return this.priceSlots; }
+  getLastPriceError(): string | null { return this.lastPriceError; }
   getCarState(carId: string): CarState | undefined { return this.carStates.get(carId); }
 
   getAllStatus() {
@@ -268,13 +315,14 @@ export class Controller {
     });
   }
 
-  /** Force execute plan for one car (used by Execute button in UI). */
+  /** Force execute plan for one car (used by Execute button in UI).
+   *  Works regardless of plug state — uses existing state or creates a minimal one. */
   async executeNow(carId: string): Promise<string> {
     const { cars } = loadSettings();
     const car = cars.find((c) => c.id === carId);
     if (!car) return `Car ${carId} not found`;
-    const state = this.carStates.get(carId);
-    if (!state) return `${car.name}: no state`;
+    // Use existing state, or create a minimal one so controlCar can run
+    const state = this.carStates.get(carId) ?? { plugged: false, plan: [] };
     await this.controlCar(car, state);
     return `${car.name}: executed`;
   }

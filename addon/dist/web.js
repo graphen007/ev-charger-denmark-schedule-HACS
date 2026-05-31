@@ -91,7 +91,6 @@ function createWebServer(controller, ha) {
     app.get("/api/car/:carId/settings", (req, res) => res.json((0, settings_js_1.getCarSettings)(req.params.carId)));
     app.post("/api/car/:carId/settings", (req, res) => {
         (0, settings_js_1.saveCarSettings)(req.params.carId, req.body);
-        controller.getAllStatus(); // trigger plan rebuild
         res.json({ ok: true });
     });
     // ---- Car diagnostic test ----
@@ -140,7 +139,10 @@ function createWebServer(controller, ha) {
         res.json({ ok: true, result });
     });
     // ---- Prices ----
-    app.get("/api/prices", (_req, res) => res.json(controller.getPriceSlots()));
+    app.get("/api/prices", (_req, res) => res.json({
+        slots: controller.getPriceSlots(),
+        error: controller.getLastPriceError(),
+    }));
     // ---- Forecast ----
     app.get("/api/forecast", async (_req, res) => {
         const { area } = (0, settings_js_1.loadSettings)();
