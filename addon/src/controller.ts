@@ -195,10 +195,10 @@ export class Controller {
 
     if (shouldCharge && !isCharging) {
       await this.ha.callService("switch", "turn_on", { entity_id: car.charging_switch });
-      console.log(`[Controller] ${car.name}: ▶ started (${currentSlot.ep.toFixed(2)} DKK/kWh)`);
+      console.log(`[Controller] ${car.name}: started (${currentSlot.ep.toFixed(2)} DKK/kWh)`);
     } else if (!shouldCharge && isCharging) {
       await this.ha.callService("switch", "turn_off", { entity_id: car.charging_switch });
-      console.log(`[Controller] ${car.name}: ⏸ paused (${currentSlot.ep.toFixed(2)} DKK/kWh)`);
+      console.log(`[Controller] ${car.name}: paused (${currentSlot.ep.toFixed(2)} DKK/kWh)`);
     }
   }
 
@@ -316,14 +316,29 @@ export class Controller {
     });
   }
 
-  /** Force execute plan for one car (used by Execute button in UI).
-   *  Works regardless of plug state — uses existing state or creates a minimal one. */
+  /** Force execute plan for one car (used by Execute button in UI). */
   async executeNow(carId: string): Promise<string> {
     const { cars } = loadSettings();
     const car = cars.find((c) => c.id === carId);
     if (!car) return `Car ${carId} not found`;
-    // Use existing state, or create a minimal one so controlCar can run
-    const state = this.carStates.get(carId) ?? { plugged: false, plan: [] };
+
+    const settings = getCarSettings(carId);
+
+    // Re-read plug state from HA directly so we always have the latest value
+    const plugState = car.plug_entity ? this.ha.getState(car.plug_entity)?.state : undefined;
+    const isPlugged = plugState === "on";
+
+    // If the car is not plugged in and the mode would turn charging on, bail out early.
+    // "Off" is still allowed — it ensures the switch is off regardless of plug state.
+    if (!isPlugged && settings.mode !== "Off") {
+      // Make sure the switch is off as a safety measure
+      if (car.charging_switch && this.ha.getState(car.charging_switch)?.state === "on") {
+        await this.ha.callService("switch", "turn_off", { entity_id: car.charging_switch });
+      }
+      return `${car.name}: not plugged in — nothing to do`;
+    }
+
+    const state = this.carStates.get(carId) ?? { plugged: isPlugged, plan: [] };
     await this.controlCar(car, state);
     return `${car.name}: executed`;
   }

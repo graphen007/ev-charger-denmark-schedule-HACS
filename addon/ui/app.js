@@ -351,7 +351,7 @@ function renderTimeline() {
       responsive: true, maintainAspectRatio: false,
       plugins: {
         legend: { display: false },
-        tooltip: { callbacks: { label: ctx => `${ctx.raw} DKK/kWh${chargingSet.has(plan[ctx.dataIndex].start) ? " ⚡ charging" : ""}` } },
+        tooltip: { callbacks: { label: ctx => `${ctx.raw} DKK/kWh${chargingSet.has(plan[ctx.dataIndex].start) ? " — charging" : ""}` } },
       },
       scales: {
         x: { ticks: { maxTicksLimit: 12, color: textColor, font: { size: 11 } }, grid: { display: false } },
@@ -457,7 +457,7 @@ function renderScheduleTable() {
     const dayHeader = dayStr !== lastDay ? ((lastDay = dayStr), `<tr class="day-row"><td colspan="3">${dayStr}</td></tr>`) : "";
     const isNow = dt <= now && now < new Date(dt.getTime() + 15 * 60000);
     return `${dayHeader}<tr class="${s.isPast ? "past" : ""} ${s.charging ? "charging" : ""} ${isNow ? "now-row" : ""}">
-      <td>${fmtTime(s.start)}${isNow ? " ◀" : ""}</td>
+      <td>${fmtTime(s.start)}${isNow ? " &lt;" : ""}</td>
       <td>${s.ep?.toFixed(2)}</td>
       <td>${s.isPast ? "" : s.charging ? "Charging" : ""}</td>
     </tr>`;
@@ -628,7 +628,7 @@ async function testCar(carId) {
   try {
     const result = await api("GET", `/api/car/${carId}/test`);
     const rows = result.entities.map(e => {
-      const icon = e.ok ? "✓" : "✗";
+      const icon = e.ok ? "OK" : "FAIL";
       const cls  = e.ok ? "test-ok" : "test-fail";
       return `<tr class="${cls}">
         <td>${e.label}</td>
