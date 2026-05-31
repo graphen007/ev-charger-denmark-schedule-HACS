@@ -3,112 +3,98 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>EV Smart Charging</title>
+  <title>EV Charging</title>
   <link rel="stylesheet" href="styles.css" />
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.2/dist/chart.umd.min.js"></script>
 </head>
 <body>
   <div id="app">
-    <nav class="sidebar">
-      <div class="sidebar-brand">
-        <span class="brand-icon">⚡</span>
-        <span class="brand-name">EV Charging</span>
-      </div>
-      <ul class="nav-links">
-        <li><a href="#" data-view="dashboard" class="nav-link active">
-          <span class="nav-icon">📊</span> Dashboard
-        </a></li>
-        <li><a href="#" data-view="plan" class="nav-link">
-          <span class="nav-icon">📅</span> Plan
-        </a></li>
-        <li><a href="#" data-view="history" class="nav-link">
-          <span class="nav-icon">📈</span> History
-        </a></li>
-        <li><a href="#" data-view="settings" class="nav-link">
-          <span class="nav-icon">⚙️</span> Settings
-        </a></li>
-      </ul>
-      <div class="sidebar-status" id="sidebar-status">Connecting…</div>
-    </nav>
+    <header class="topbar">
+      <div class="topbar-brand">EV Charging</div>
+      <nav class="topbar-nav">
+        <a href="#" data-view="dashboard" class="nav-link active">Dashboard</a>
+        <a href="#" data-view="plan" class="nav-link">Plan</a>
+        <a href="#" data-view="history" class="nav-link">History</a>
+        <a href="#" data-view="settings" class="nav-link">Settings</a>
+      </nav>
+      <div class="topbar-status" id="topbar-status">Connecting</div>
+    </header>
 
     <main class="content">
+
       <!-- DASHBOARD -->
       <div id="view-dashboard" class="view active">
         <div class="view-header">
           <h1>Dashboard</h1>
-          <button class="btn-icon" id="btn-refresh" title="Refresh prices">↻</button>
+          <button class="btn-text" id="btn-refresh">Refresh prices</button>
         </div>
 
         <div id="cars-status-grid" class="cars-grid"></div>
 
-        <div class="card" id="forecast-banner" style="display:none">
-          <div class="card-inner forecast-inner">
-            <span class="forecast-icon">🔮</span>
-            <span id="forecast-label">Loading forecast…</span>
-            <div class="forecast-indicators" id="forecast-indicators"></div>
-          </div>
+        <div id="forecast-banner" class="forecast-bar" style="display:none">
+          <span id="forecast-label"></span>
+          <div id="forecast-indicators" class="forecast-chips"></div>
         </div>
 
-        <div class="card">
-          <div class="card-header-row">
-            <h2>Price & Charge Plan</h2>
-            <div class="legend-row" id="chart-legend"></div>
+        <section class="section">
+          <div class="section-header">
+            <h2>Price overview</h2>
+            <div class="price-strip" id="price-strip"></div>
           </div>
           <div class="chart-wrap">
             <canvas id="price-chart"></canvas>
           </div>
-          <div class="price-strip" id="price-strip"></div>
-        </div>
+        </section>
 
-        <div class="card smart-actions" id="smart-actions" style="display:none">
-          <h3>💡 Smart Suggestion</h3>
-          <p id="smart-tip"></p>
+        <div id="smart-actions" class="alert-bar" style="display:none">
+          <strong>Suggestion</strong>
+          <span id="smart-tip"></span>
         </div>
       </div>
 
       <!-- PLAN -->
       <div id="view-plan" class="view">
         <div class="view-header">
-          <h1>Charge Plan</h1>
+          <h1>Charge plan</h1>
           <select id="plan-car-select" class="select-inline"></select>
         </div>
 
-        <div class="card">
-          <h2>Charging Mode</h2>
+        <section class="section">
+          <h2>Mode</h2>
           <div class="mode-grid" id="mode-grid"></div>
-        </div>
+        </section>
 
-        <div class="card" id="mode-settings-card">
+        <section class="section" id="mode-settings-card" style="display:none">
           <h2>Settings</h2>
           <div id="mode-settings"></div>
-        </div>
+        </section>
 
-        <div class="card">
+        <section class="section">
           <h2>Estimate</h2>
           <div id="plan-estimate"></div>
-        </div>
+        </section>
 
-        <div class="card">
-          <button class="btn btn-primary btn-lg" id="btn-execute">▶ Execute plan now</button>
+        <section class="section">
+          <button class="btn btn-primary btn-block" id="btn-execute">Execute plan now</button>
           <div id="execute-result" class="execute-result"></div>
-          <p class="hint">Charge control runs automatically every 5 minutes.</p>
-        </div>
+          <p class="note">Charge control runs automatically every 5 minutes.</p>
+        </section>
 
-        <div class="card">
+        <section class="section">
           <details>
-            <summary class="schedule-toggle">Show 15-min schedule</summary>
-            <table class="schedule-table" id="schedule-table">
+            <summary class="schedule-toggle">15-minute schedule</summary>
+            <table class="data-table" id="schedule-table">
               <thead><tr><th>Time</th><th>DKK/kWh</th><th>Status</th></tr></thead>
               <tbody id="schedule-body"></tbody>
             </table>
           </details>
-        </div>
+        </section>
       </div>
 
       <!-- HISTORY -->
       <div id="view-history" class="view">
         <div class="view-header">
-          <h1>Charging History</h1>
+          <h1>History</h1>
           <select id="history-car-filter" class="select-inline">
             <option value="">All cars</option>
           </select>
@@ -116,36 +102,36 @@
 
         <div class="stats-row" id="history-stats"></div>
 
-        <div class="card">
-          <h2>Monthly Summary</h2>
-          <canvas id="history-chart" height="120"></canvas>
-        </div>
+        <section class="section">
+          <h2>Monthly kWh</h2>
+          <canvas id="history-chart" height="100"></canvas>
+        </section>
 
-        <div class="card">
+        <section class="section">
           <h2>Sessions</h2>
-          <table class="history-table">
+          <table class="data-table">
             <thead><tr><th>Date</th><th>Car</th><th>SoC</th><th>kWh</th><th>Cost</th><th>Avg price</th><th>Duration</th></tr></thead>
             <tbody id="history-body"></tbody>
           </table>
-        </div>
+        </section>
       </div>
 
       <!-- SETTINGS -->
       <div id="view-settings" class="view">
         <div class="view-header"><h1>Settings</h1></div>
 
-        <div class="card">
-          <div class="card-header-row">
+        <section class="section">
+          <div class="section-header">
             <h2>Cars</h2>
-            <button class="btn btn-primary" id="btn-add-car">+ Add car</button>
+            <button class="btn btn-primary" id="btn-add-car">Add car</button>
           </div>
           <div id="cars-list"></div>
-        </div>
+        </section>
 
-        <div class="card" id="car-form-card" style="display:none">
+        <section class="section" id="car-form-card" style="display:none">
           <h2 id="car-form-title">Add car</h2>
-          <form id="car-form" class="settings-form">
-            <div class="form-row"><label>ID (slug, no spaces)</label><input id="cf-id" type="text" placeholder="kia_pv5" /></div>
+          <form id="car-form" class="form">
+            <div class="form-row"><label>ID</label><input id="cf-id" type="text" placeholder="kia_pv5" /></div>
             <div class="form-row"><label>Name</label><input id="cf-name" type="text" placeholder="Kia PV5" /></div>
             <div class="form-row"><label>Battery (kWh)</label><input id="cf-battery" type="number" step="0.1" value="71.2" /></div>
             <div class="form-row"><label>Charge speed (kW)</label><input id="cf-chargekw" type="number" step="0.5" value="9.5" /></div>
@@ -157,30 +143,30 @@
             <div class="form-row"><label>Solar power sensor (optional)</label><select id="cf-solar"></select></div>
             <div class="form-row"><label>House consumption sensor (optional)</label><select id="cf-consumption"></select></div>
             <div class="form-actions">
-              <button type="submit" class="btn btn-primary" id="cf-save">Save car</button>
+              <button type="submit" class="btn btn-primary" id="cf-save">Save</button>
               <button type="button" class="btn" id="cf-cancel">Cancel</button>
             </div>
           </form>
-        </div>
+        </section>
 
-        <div class="card">
-          <h2>Tariffs <span class="hint-inline">(N1 Nettarif C incl. VAT)</span></h2>
-          <form id="tariffs-form" class="settings-form tariffs-grid">
-            <div class="form-row"><label>Low (00–06h)</label><input class="tf" data-key="low" type="number" step="0.01" /></div>
-            <div class="form-row"><label>High summer (06–17+21–24h Apr–Sep)</label><input class="tf" data-key="high_summer" type="number" step="0.01" /></div>
-            <div class="form-row"><label>High winter (06–17+21–24h Oct–Mar)</label><input class="tf" data-key="high_winter" type="number" step="0.01" /></div>
-            <div class="form-row"><label>Peak summer (17–21h Apr–Sep)</label><input class="tf" data-key="peak_summer" type="number" step="0.01" /></div>
-            <div class="form-row"><label>Peak winter (17–21h Oct–Mar)</label><input class="tf" data-key="peak_winter" type="number" step="0.01" /></div>
-            <div class="form-row"><label>Energinet (fixed incl. VAT)</label><input class="tf" data-key="energinet" type="number" step="0.01" /></div>
+        <section class="section">
+          <h2>Tariffs <span class="label-note">N1 Nettarif C incl. 25% VAT</span></h2>
+          <form id="tariffs-form" class="form tariffs-grid">
+            <div class="form-row"><label>Low (00-06h)</label><input class="tf" data-key="low" type="number" step="0.01" /></div>
+            <div class="form-row"><label>High summer (06-17h + 21-24h, Apr-Sep)</label><input class="tf" data-key="high_summer" type="number" step="0.01" /></div>
+            <div class="form-row"><label>High winter (06-17h + 21-24h, Oct-Mar)</label><input class="tf" data-key="high_winter" type="number" step="0.01" /></div>
+            <div class="form-row"><label>Peak summer (17-21h, Apr-Sep)</label><input class="tf" data-key="peak_summer" type="number" step="0.01" /></div>
+            <div class="form-row"><label>Peak winter (17-21h, Oct-Mar)</label><input class="tf" data-key="peak_winter" type="number" step="0.01" /></div>
+            <div class="form-row"><label>Energinet (fixed)</label><input class="tf" data-key="energinet" type="number" step="0.01" /></div>
             <div class="form-row"><label>Elafgift (EV exempt)</label><input class="tf" data-key="elafgift" type="number" step="0.01" /></div>
             <div class="form-row"><label>Supplier add-on</label><input class="tf" data-key="supplier" type="number" step="0.01" /></div>
             <div class="form-actions"><button type="submit" class="btn btn-primary">Save tariffs</button></div>
           </form>
-        </div>
+        </section>
 
-        <div class="card">
+        <section class="section">
           <h2>Notifications</h2>
-          <form id="notif-form" class="settings-form">
+          <form id="notif-form" class="form">
             <div class="form-row toggle-row">
               <label>Tomorrow's prices published</label>
               <input type="checkbox" id="nf-published" class="toggle" />
@@ -193,13 +179,13 @@
               <label>Price spike threshold (DKK/kWh)</label>
               <input id="nf-spike" type="number" step="0.1" value="3.0" />
             </div>
-            <div class="form-actions"><button type="submit" class="btn btn-primary">Save notifications</button></div>
+            <div class="form-actions"><button type="submit" class="btn btn-primary">Save</button></div>
           </form>
-        </div>
+        </section>
       </div>
+
     </main>
   </div>
-
   <script src="app.js"></script>
 </body>
 </html>

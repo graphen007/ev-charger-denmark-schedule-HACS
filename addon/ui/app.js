@@ -1,47 +1,86 @@
 // EV Smart Charging — Addon UI
-// Talks to the addon REST API + WebSocket for live updates.
 
-const MODES = ["Charge Now", "Cheapest Hours", "Below Threshold", "Departure Plan", "Solar Surplus", "Off"];
-const MODE_ICONS = { "Charge Now": "⚡", "Cheapest Hours": "💰", "Below Threshold": "🎯", "Departure Plan": "🗓️", "Solar Surplus": "☀️", "Off": "🔴" };
+// Detect ingress base path so API calls work both directly and via HA Ingress proxy
+const BASE_URL = (() => {
+  const p = location.pathname;
+  // Strip trailing filename if any, then trailing slash
+  return p.replace(/\/[^/]*\.[^/]*$/, '').replace(/\/$/, '');
+})();
 
-let state = {
-  status: [],          // getAllStatus()
-  prices: [],          // PriceSlot[]
-  forecast: null,
-  settings: null,
-  selectedPlanCar: null,
-  carSettings: {},     // { [carId]: CarSettings }
-  haEntities: [],
-  editingCarId: null,  // null = adding, string = editing
+const MODES = [
+  { id: "Charge Now",       desc: "Start immediately" },
+  { id: "Cheapest Hours",   desc: "Cheapest N hours today" },
+  { id: "Below Threshold",  desc: "When price is below ceiling" },
+  { id: "Departure Plan",   desc: "Ready by departure time" },
+  { id: "Solar Surplus",    desc: "When solar produces surplus" },
+  { id: "Off",              desc: "Manual override off" },
+];
+
+const DEFAULT_TARIFFS = {
+  low:          0.11,
+  high_summer:  0.17,
+  high_winter:  0.32,
+  peak_summer:  0.43,
+  peak_winter:  0.97,
+  energinet:    0.21,
+  elafgift:     0.00,
+  supplier:     0.00,
 };
 
-let priceChart = null;
+const TARIFF_LABELS = {
+  low:          "Low (00-06h)",
+  high_summer:  "High summer (06-17h + 21-24h, Apr-Sep)",
+  high_winter:  "High winter (06-17h + 21-24h, Oct-Mar)",
+  peak_summer:  "Peak summer (17-21h, Apr-Sep)",
+  peak_winter:  "Peak winter (17-21h, Oct-Mar)",
+  energinet:    "Energinet (fixed)",
+  elafgift:     "Elafgift (EV exempt)",
+  supplier:     "Supplier add-on",
+};
+
+let state = {
+  status:          [],
+  prices:          [],
+  forecast:        null,
+  settings:        null,
+  selectedPlanCar: null,
+  carSettings:     {},
+  haEntities:      [],
+  editingCarId:    null,
+};
+
+let priceChart   = null;
 let historyChart = null;
 
 // ---- WebSocket ----
 function connectWs() {
   const proto = location.protocol === "https:" ? "wss:" : "ws:";
-  const ws = new WebSocket(`${proto}//${location.host}/ws`);
+  const ws = new WebSocket(`${proto}//${location.host}${BASE_URL}/ws`);
   ws.onmessage = (e) => {
     const { event, data } = JSON.parse(e.data);
     if (event === "status")         { state.status = data; renderDashboard(); renderPlan(); }
     if (event === "plan_updated")   { const s = state.status.find(c => c.carId === data.carId); if (s) s.plan = data.plan; renderDashboard(); renderPlan(); }
     if (event === "prices_updated") { loadPrices(); }
     if (event === "plug_changed")   { loadStatus(); }
-    setSidebarStatus("Connected ✓");
+    setStatus("Connected", true);
   };
-  ws.onclose = () => { setSidebarStatus("Reconnecting…"); setTimeout(connectWs, 3000); };
-  ws.onerror = () => { setSidebarStatus("Connection error"); };
+  ws.onclose = () => { setStatus("Reconnecting"); setTimeout(connectWs, 3000); };
+  ws.onerror = () => { setStatus("Connection error"); };
 }
 
-function setSidebarStatus(msg) { document.getElementById("sidebar-status").textContent = msg; }
+function setStatus(msg, ok = false) {
+  const el = document.getElementById("topbar-status");
+  if (!el) return;
+  el.textContent = msg;
+  el.className = "topbar-status" + (ok ? " connected" : "");
+}
 
 // ---- API ----
 async function api(method, path, body) {
   const opts = { method, headers: { "Content-Type": "application/json" } };
   if (body) opts.body = JSON.stringify(body);
-  const res = await fetch(path, opts);
-  if (!res.ok) throw new Error(`${method} ${path} → ${res.status}`);
+  const res = await fetch(`${BASE_URL}${path}`, opts);
+  if (!res.ok) throw new Error(`${method} ${path} -> ${res.status}`);
   return res.json();
 }
 
@@ -74,17 +113,11 @@ async function loadPrices() {
 }
 
 async function loadForecast() {
-  try {
-    state.forecast = await api("GET", "/api/forecast");
-    renderForecastBanner();
-  } catch {}
+  try { state.forecast = await api("GET", "/api/forecast"); renderForecastBanner(); } catch {}
 }
 
 function renderAll() {
-  renderDashboard();
-  renderPlan();
-  renderHistory();
-  renderSettingsView();
+  renderDashboard(); renderPlan(); renderSettingsView();
 }
 
 // ---- Dashboard ----
@@ -97,35 +130,30 @@ function renderDashboard() {
 
 function renderCarsGrid() {
   const grid = document.getElementById("cars-status-grid");
-  if (!grid || !state.status.length) return;
+  if (!grid) return;
+  if (!state.status.length) { grid.innerHTML = '<div class="car-card"><p style="color:#a1a1aa;font-size:.85rem">No cars configured. Go to Settings to add a car.</p></div>'; return; }
   grid.innerHTML = state.status.map(car => {
     const cs = state.carSettings[car.carId] ?? {};
-    const socPct = Math.round(car.soc ?? 0);
-    const barColor = socPct < 20 ? "#ef4444" : socPct < 40 ? "#f59e0b" : "#22c55e";
-    const statusBadge = car.isFastCharger ? "⚡ DC Fast" : car.isCharging ? "⚡ Charging" : car.plugged ? "🔌 Connected" : "– Not connected";
-    const statusClass = car.isCharging ? "badge-charging" : car.plugged ? "badge-plugged" : "badge-idle";
+    const soc = Math.round(car.soc ?? 0);
+    const fillClass = soc < 20 ? "low" : soc > 80 ? "high" : "";
+    const statusText = car.isFastCharger ? "DC Fast" : car.isCharging ? "Charging" : car.plugged ? "Connected" : "Not connected";
+    const statusClass = car.isCharging ? "charging" : car.isFastCharger ? "fast" : "";
     const nextSlot = car.plan?.find(s => !s.isPast && s.charging && new Date(s.start) > new Date());
-    const nextLabel = nextSlot ? `Next: ${fmtTime(nextSlot.start)}` : (cs.mode === "Off" ? "Off" : "No charge scheduled");
-    return `
-      <div class="car-card ${car.isCharging ? "car-charging" : ""}">
-        <div class="car-card-header">
-          <div class="car-name">${car.carName}</div>
-          <span class="badge ${statusClass}">${statusBadge}</span>
-        </div>
-        <div class="soc-row">
-          <span class="soc-value">${socPct}%</span>
-          ${car.powerW > 0 ? `<span class="power-label">${(car.powerW / 1000).toFixed(1)} kW</span>` : ""}
-        </div>
-        <div class="soc-bar-wrap">
-          <div class="soc-bar-fill" style="width:${socPct}%;background:${barColor}"></div>
-        </div>
-        <div class="car-mode-row">
-          <span class="mode-badge">${MODE_ICONS[cs.mode] ?? "?"} ${cs.mode ?? "–"}</span>
-          <span class="next-label">${nextLabel}</span>
-        </div>
-        ${car.summary ? `<div class="car-estimate">+${car.summary.kwhAdded?.toFixed(1)} kWh → ${Math.round(car.summary.finalSoc)}% · ~${car.summary.totalCost?.toFixed(2)} DKK</div>` : ""}
+    const nextLabel = nextSlot ? `Next charge: ${fmtTime(nextSlot.start)}` : (cs.mode === "Off" ? "Off" : "No charge scheduled");
+    return `<div class="car-card">
+      <div class="car-card-header">
+        <span class="car-name">${car.carName}</span>
+        <span class="status-tag ${statusClass}">${statusText}</span>
       </div>
-    `;
+      <div class="soc-value">${soc}<span class="soc-unit">%</span></div>
+      ${car.powerW > 0 ? `<div class="power-reading">${(car.powerW/1000).toFixed(1)} kW</div>` : '<div class="power-reading">&nbsp;</div>'}
+      <div class="soc-track"><div class="soc-fill ${fillClass}" style="width:${soc}%"></div></div>
+      <div class="car-meta">
+        <span class="car-mode-label">${cs.mode ?? "Not set"}</span>
+        <span>${nextLabel}</span>
+      </div>
+      ${car.summary ? `<div class="car-estimate">+${car.summary.kwhAdded?.toFixed(1)} kWh to ${Math.round(car.summary.finalSoc)}%  ~${car.summary.totalCost?.toFixed(2)} DKK</div>` : ""}
+    </div>`;
   }).join("");
 }
 
@@ -133,118 +161,95 @@ function renderForecastBanner() {
   const f = state.forecast;
   const banner = document.getElementById("forecast-banner");
   if (!f || !banner) return;
-
-  // Only show if tomorrow's prices aren't in state.prices
-  const tomorrow = new Date(); tomorrow.setDate(tomorrow.getDate() + 1);
-  const tomorrowStr = tomorrow.toDateString();
-  const hasTomorrow = (state.prices || []).some(s => new Date(s.start).toDateString() === tomorrowStr);
-  if (hasTomorrow) { banner.style.display = "none"; return; }
-
   banner.style.display = "";
-  document.getElementById("forecast-label").textContent = f.label ?? "Forecast unavailable";
-  const ind = document.getElementById("forecast-indicators");
-  ind.innerHTML = [
-    f.windCapacityPct !== null ? `<span class="f-chip">💨 Wind ${Math.round(f.windCapacityPct * 100)}%</span>` : "",
-    f.co2gPerKwh !== null ? `<span class="f-chip">🌿 ${Math.round(f.co2gPerKwh)}g CO₂/kWh</span>` : "",
-    f.historicalAvg !== null ? `<span class="f-chip">📊 Typical ~${f.historicalAvg.toFixed(2)} DKK/kWh</span>` : "",
+  document.getElementById("forecast-label").textContent = f.label ?? "Price forecast";
+  document.getElementById("forecast-indicators").innerHTML = [
+    f.windCapacityPct !== null ? `<span class="forecast-chip">Wind ${Math.round(f.windCapacityPct * 100)}%</span>` : "",
+    f.co2gPerKwh !== null ? `<span class="forecast-chip">${Math.round(f.co2gPerKwh)} g CO2/kWh</span>` : "",
+    f.historicalAvg !== null ? `<span class="forecast-chip">Typical ~${f.historicalAvg.toFixed(2)} DKK/kWh</span>` : "",
   ].join("");
 }
 
 function renderPriceChart() {
   const canvas = document.getElementById("price-chart");
   if (!canvas || !state.prices.length) return;
-
   const now = new Date();
-  const slots = state.prices.map(s => {
-    const dt = new Date(s.start);
-    // Compute effective price client-side using default tariffs (server sends raw spot)
-    const tariffs = state.settings?.tariffs ?? {};
-    const ep = computeEp(s.value, dt, tariffs);
-    return { dt, value: s.value, ep, start: s.start };
-  });
-
-  // Build plan overlay from first car's plan
+  const tariffs = state.settings?.tariffs ?? {};
   const planSlots = state.status?.[0]?.plan ?? [];
   const chargingSet = new Set(planSlots.filter(s => s.charging).map(s => s.start));
 
-  const labels = slots.map(s => fmtTime(s.start));
+  const slots = state.prices.map(s => {
+    const dt = new Date(s.start);
+    return { dt, ep: computeEp(s.value, dt, tariffs), start: s.start };
+  });
+
   const epData = slots.map(s => parseFloat(s.ep.toFixed(3)));
   const bgColors = slots.map(s => {
-    if (s.dt < now) return "rgba(120,120,120,0.25)";
-    if (chargingSet.has(s.start)) return s.ep < Math.min(...epData) * 1.3 ? "rgba(34,197,94,0.85)" : "rgba(34,197,94,0.65)";
-    return "rgba(99,179,237,0.35)";
+    if (s.dt < now) return "rgba(0,0,0,0.08)";
+    if (chargingSet.has(s.start)) return "rgba(22,163,74,0.85)";
+    return "rgba(0,0,0,0.15)";
   });
 
   if (priceChart) priceChart.destroy();
   priceChart = new Chart(canvas, {
     type: "bar",
     data: {
-      labels,
-      datasets: [{
-        label: "Effective price (DKK/kWh)",
-        data: epData,
-        backgroundColor: bgColors,
-        borderRadius: 3,
-        borderSkipped: false,
-      }],
+      labels: slots.map(s => fmtTime(s.start)),
+      datasets: [{ data: epData, backgroundColor: bgColors, borderRadius: 2, borderSkipped: false }],
     },
     options: {
-      responsive: true,
-      maintainAspectRatio: false,
+      responsive: true, maintainAspectRatio: false,
       plugins: {
         legend: { display: false },
-        tooltip: {
-          callbacks: {
-            label: (ctx) => `${ctx.raw} DKK/kWh${chargingSet.has(slots[ctx.dataIndex].start) ? " ⚡" : ""}`,
-          }
-        }
+        tooltip: { callbacks: { label: ctx => `${ctx.raw} DKK/kWh${chargingSet.has(slots[ctx.dataIndex].start) ? " — charging" : ""}` } }
       },
       scales: {
-        x: { ticks: { maxTicksLimit: 12, color: "#94a3b8" }, grid: { display: false } },
-        y: { ticks: { color: "#94a3b8" }, grid: { color: "rgba(148,163,184,0.1)" } },
+        x: { ticks: { maxTicksLimit: 12, color: "#a1a1aa", font: { size: 11 } }, grid: { display: false } },
+        y: { ticks: { color: "#a1a1aa", font: { size: 11 } }, grid: { color: "rgba(0,0,0,0.05)" } },
       },
-      animation: { duration: 300 },
+      animation: { duration: 200 },
     },
   });
-
-  // Update legend
-  document.getElementById("chart-legend").innerHTML = `
-    <span class="legend-item"><span class="legend-swatch" style="background:rgba(34,197,94,.85)"></span>Charging (cheap)</span>
-    <span class="legend-item"><span class="legend-swatch" style="background:rgba(99,179,237,.35)"></span>Not charging</span>
-    <span class="legend-item"><span class="legend-swatch" style="background:rgba(120,120,120,.25)"></span>Past</span>
-  `;
 }
 
 function computeEp(spot, dt, tariffs) {
   const h = dt.getHours(), m = dt.getMonth() + 1;
   const isSummer = m >= 4 && m <= 9;
-  let n1 = tariffs.low ?? 0.11;
-  if (h >= 6 && h < 17 || h >= 21) n1 = isSummer ? (tariffs.high_summer ?? 0.17) : (tariffs.high_winter ?? 0.32);
-  if (h >= 17 && h < 21)           n1 = isSummer ? (tariffs.peak_summer ?? 0.43) : (tariffs.peak_winter ?? 0.97);
-  return spot * 1.25 + n1 + (tariffs.energinet ?? 0.21) + (tariffs.elafgift ?? 0) + (tariffs.supplier ?? 0);
+  let n1 = tariffs.low ?? DEFAULT_TARIFFS.low;
+  if (h >= 6 && h < 17 || h >= 21) n1 = isSummer ? (tariffs.high_summer ?? DEFAULT_TARIFFS.high_summer) : (tariffs.high_winter ?? DEFAULT_TARIFFS.high_winter);
+  if (h >= 17 && h < 21)           n1 = isSummer ? (tariffs.peak_summer ?? DEFAULT_TARIFFS.peak_summer) : (tariffs.peak_winter ?? DEFAULT_TARIFFS.peak_winter);
+  return spot * 1.25 + n1 + (tariffs.energinet ?? DEFAULT_TARIFFS.energinet) + (tariffs.elafgift ?? DEFAULT_TARIFFS.elafgift) + (tariffs.supplier ?? DEFAULT_TARIFFS.supplier);
 }
 
 function renderPriceStrip() {
   const strip = document.getElementById("price-strip");
   if (!strip || !state.prices.length) return;
   const now = new Date();
+  const tariffs = state.settings?.tariffs ?? {};
   const todayStr = now.toDateString();
   const today = state.prices.filter(s => new Date(s.start).toDateString() === todayStr);
-  const tariffs = state.settings?.tariffs ?? {};
-  const todayEps = today.map(s => computeEp(s.value, new Date(s.start), tariffs));
-  const current = today.find(s => { const d = new Date(s.start); return d <= now && now < new Date(d.getTime() + 3600000); });
-  const currentEp = current ? computeEp(current.value, new Date(current.start), tariffs) : null;
-  const lo = todayEps.length ? Math.min(...todayEps) : null;
-  const hi = todayEps.length ? Math.max(...todayEps) : null;
-  const rank = currentEp != null && lo != null && hi != null && hi > lo
-    ? Math.round(((currentEp - lo) / (hi - lo)) * 100) : null;
-  const rankClass = rank !== null ? (rank < 33 ? "chip-cheap" : rank < 66 ? "chip-mid" : "chip-peak") : "";
+  const todayEps = today.map(s => ({ ep: computeEp(s.value, new Date(s.start), tariffs), start: s.start, dt: new Date(s.start) }));
+  const current = todayEps.find(s => s.dt <= now && now < new Date(s.dt.getTime() + 3600000));
+  const lo = todayEps.length ? Math.min(...todayEps.map(s => s.ep)) : null;
+  const hi = todayEps.length ? Math.max(...todayEps.map(s => s.ep)) : null;
+  const currentEp = current?.ep ?? null;
+  const rank = currentEp != null && lo != null && hi != null && hi > lo ? Math.round(((currentEp - lo) / (hi - lo)) * 100) : null;
+  const rankClass = rank !== null ? (rank < 33 ? "cheap" : rank < 66 ? "mid" : "peak") : "";
+
   strip.innerHTML = `
-    <div class="price-chip ${rankClass}"><div class="chip-label">Now</div><div class="chip-value">${currentEp != null ? currentEp.toFixed(2) : "–"}</div><div class="chip-unit">DKK/kWh</div></div>
-    <div class="price-chip chip-cheap"><div class="chip-label">Lowest today</div><div class="chip-value">${lo != null ? lo.toFixed(2) : "–"}</div><div class="chip-unit">DKK/kWh</div></div>
-    <div class="price-chip chip-peak"><div class="chip-label">Highest today</div><div class="chip-value">${hi != null ? hi.toFixed(2) : "–"}</div><div class="chip-unit">DKK/kWh</div></div>
-    ${rank !== null ? `<div class="price-chip"><div class="chip-label">Price rank</div><div class="chip-value ${rankClass}">${rank}%</div><div class="chip-unit">of today</div></div>` : ""}
-    <div class="chip-note">Incl. N1 Nettarif C + Energinet tariffs</div>
+    <div class="price-chip">
+      <span class="chip-label">Now</span>
+      <span class="chip-value ${rankClass}">${currentEp != null ? currentEp.toFixed(2) : "--"}<span class="chip-unit"> DKK</span></span>
+    </div>
+    <div class="price-chip">
+      <span class="chip-label">Lowest today</span>
+      <span class="chip-value cheap">${lo != null ? lo.toFixed(2) : "--"}<span class="chip-unit"> DKK</span></span>
+    </div>
+    <div class="price-chip">
+      <span class="chip-label">Highest today</span>
+      <span class="chip-value peak">${hi != null ? hi.toFixed(2) : "--"}<span class="chip-unit"> DKK</span></span>
+    </div>
+    ${rank !== null ? `<div class="price-chip"><span class="chip-label">Price rank</span><span class="chip-value ${rankClass}">${rank}%<span class="chip-unit"> of today</span></span></div>` : ""}
   `;
 }
 
@@ -254,31 +259,25 @@ function renderSmartTip() {
   if (!tipEl || !state.prices.length || !state.status.length) { container.style.display = "none"; return; }
   const now = new Date();
   const tariffs = state.settings?.tariffs ?? {};
-  const todayEps = state.prices.filter(s => new Date(s.start).toDateString() === now.toDateString())
+  const todayEps = state.prices
+    .filter(s => new Date(s.start).toDateString() === now.toDateString())
     .map(s => ({ ep: computeEp(s.value, new Date(s.start), tariffs), start: s.start, dt: new Date(s.start) }));
-  const sortedEps = [...todayEps].sort((a,b) => a.ep - b.ep);
-  const p25 = sortedEps[Math.floor(sortedEps.length * 0.25)]?.ep;
+  const sorted = [...todayEps].sort((a, b) => a.ep - b.ep);
+  const p25 = sorted[Math.floor(sorted.length * 0.25)]?.ep;
   const current = todayEps.find(s => s.dt <= now && now < new Date(s.dt.getTime() + 3600000));
-  const first = state.status[0];
-  const cs = state.carSettings[first?.carId] ?? {};
-
+  const cs = state.carSettings[state.status[0]?.carId] ?? {};
   let tip = "";
-  if (current && cs.mode !== "Charge Now" && current.ep <= (p25 ?? Infinity)) {
-    tip = `💡 Current price (${current.ep.toFixed(2)} DKK/kWh) is in the cheapest 25% today — consider switching to Charge Now.`;
-  } else if (cs.mode === "Off" && sortedEps[0]) {
-    tip = `💡 Cheapest slot today is ${fmtTime(sortedEps[0].start)} at ${sortedEps[0].ep.toFixed(2)} DKK/kWh — enable a charging mode to take advantage.`;
-  }
+  if (current && cs.mode !== "Charge Now" && current.ep <= (p25 ?? Infinity))
+    tip = `Current price (${current.ep.toFixed(2)} DKK/kWh) is in the cheapest 25% today.`;
+  else if (cs.mode === "Off" && sorted[0])
+    tip = `Cheapest slot today is ${fmtTime(sorted[0].start)} at ${sorted[0].ep.toFixed(2)} DKK/kWh.`;
   if (tip) { tipEl.textContent = tip; container.style.display = ""; }
   else container.style.display = "none";
 }
 
 // ---- Plan view ----
 function renderPlan() {
-  renderPlanCarSelect();
-  renderModeGrid();
-  renderModeSettings();
-  renderPlanEstimate();
-  renderScheduleTable();
+  renderPlanCarSelect(); renderModeGrid(); renderModeSettings(); renderPlanEstimate(); renderScheduleTable();
 }
 
 function renderPlanCarSelect() {
@@ -292,9 +291,9 @@ function renderModeGrid() {
   if (!grid) return;
   const cs = state.carSettings[state.selectedPlanCar] ?? {};
   grid.innerHTML = MODES.map(m => `
-    <button class="mode-btn ${cs.mode === m ? "active" : ""}" data-mode="${m}">
-      <span class="mode-btn-icon">${MODE_ICONS[m]}</span>
-      <span class="mode-btn-label">${m}</span>
+    <button class="mode-btn ${cs.mode === m.id ? "active" : ""}" data-mode="${m.id}">
+      <span class="mode-btn-label">${m.id}</span>
+      <span class="mode-btn-desc">${m.desc}</span>
     </button>`).join("");
   grid.querySelectorAll(".mode-btn").forEach(btn => btn.addEventListener("click", async () => {
     const cs2 = { ...(state.carSettings[state.selectedPlanCar] ?? {}), mode: btn.dataset.mode };
@@ -313,27 +312,26 @@ function renderModeSettings() {
   if (!mode || mode === "Charge Now" || mode === "Off" || mode === "Solar Surplus") { card.style.display = "none"; return; }
   card.style.display = "";
   let html = "";
-  if (mode === "Cheapest Hours") {
-    html = slider("cheapest_hours", "Cheapest hours", cs.cheapest_hours ?? 4, 1, 12, 1, "hrs");
-  } else if (mode === "Below Threshold") {
-    html = slider("price_threshold", "Price ceiling", cs.price_threshold ?? 0.5, 0.1, 5.0, 0.05, "DKK/kWh");
-  } else if (mode === "Departure Plan") {
-    html = `<div class="setting-row"><label>Departure time</label><input type="time" id="sr-departure_time" value="${cs.departure_time ?? "07:00"}" /></div>`
-         + slider("target_soc", "Target SoC at departure", cs.target_soc ?? 80, 30, 100, 5, "%");
+  if (mode === "Cheapest Hours")   html += slider("cheapest_hours",  "Cheapest hours",      cs.cheapest_hours  ?? 4,    1,   12,  1,    "hrs");
+  if (mode === "Below Threshold")  html += slider("price_threshold", "Price ceiling",        cs.price_threshold ?? 0.5,  0.1, 5.0, 0.05, "DKK/kWh");
+  if (mode === "Departure Plan") {
+    html += `<div class="setting-row"><label>Departure time</label><input type="time" id="sr-departure_time" value="${cs.departure_time ?? "07:00"}" /></div>`;
+    html += slider("target_soc", "Target SoC at departure", cs.target_soc ?? 80, 30, 100, 5, "%");
   }
   html += slider("charge_limit", "AC charge limit", cs.charge_limit ?? 100, 50, 100, 5, "%");
   el.innerHTML = html;
   el.querySelectorAll("input[type=range]").forEach(inp => {
-    const display = inp.parentElement.querySelector(".slider-val");
     inp.addEventListener("input", async () => {
-      if (display) display.textContent = `${inp.value}${inp.dataset.unit}`;
+      inp.previousElementSibling?.querySelector(".slider-val") && (inp.previousElementSibling.querySelector(".slider-val").textContent = `${inp.value}${inp.dataset.unit}`);
+      const lbl = inp.closest(".setting-row").querySelector(".slider-val");
+      if (lbl) lbl.textContent = `${inp.value}${inp.dataset.unit}`;
       const cs2 = { ...(state.carSettings[state.selectedPlanCar] ?? {}), [inp.dataset.key]: parseFloat(inp.value) };
       state.carSettings[state.selectedPlanCar] = cs2;
       await api("POST", `/api/car/${state.selectedPlanCar}/settings`, cs2);
       await loadStatus();
     });
   });
-  el.querySelector("#sr-departure_time")?.addEventListener("change", async (e) => {
+  el.querySelector("#sr-departure_time")?.addEventListener("change", async e => {
     const cs2 = { ...(state.carSettings[state.selectedPlanCar] ?? {}), departure_time: e.target.value };
     state.carSettings[state.selectedPlanCar] = cs2;
     await api("POST", `/api/car/${state.selectedPlanCar}/settings`, cs2);
@@ -343,7 +341,7 @@ function renderModeSettings() {
 
 function slider(key, label, value, min, max, step, unit) {
   return `<div class="setting-row">
-    <label>${label} <span class="slider-val">${value}${unit}</span></label>
+    <label>${label} — <span class="slider-val">${value}${unit}</span></label>
     <input type="range" min="${min}" max="${max}" step="${step}" value="${value}" data-key="${key}" data-unit="${unit}" />
   </div>`;
 }
@@ -353,23 +351,21 @@ function renderPlanEstimate() {
   if (!el) return;
   const carStatus = state.status.find(c => c.carId === state.selectedPlanCar);
   const s = carStatus?.summary;
-  if (!s) { el.innerHTML = `<div class="estimate-empty">No plan active — select a mode.</div>`; return; }
+  if (!s) { el.innerHTML = `<div class="estimate-empty">No plan active — select a mode above.</div>`; return; }
   el.innerHTML = `
-    <div class="estimate-main">+${s.kwhAdded?.toFixed(1)} kWh → ${Math.round(s.finalSoc)}% SoC</div>
+    <div class="estimate-main">+${s.kwhAdded?.toFixed(1)} kWh to ${Math.round(s.finalSoc)}%</div>
     <div class="estimate-cost">Estimated cost: ~${s.totalCost?.toFixed(2)} DKK</div>
     <div class="estimate-stats">
-      <span>Cheapest: ${s.cheapestSlot?.ep?.toFixed(2) ?? "–"} DKK/kWh</span>
-      <span>Most exp.: ${s.priesiestSlot?.ep?.toFixed(2) ?? "–"} DKK/kWh</span>
-      <span>Avg: ${s.avgEp?.toFixed(2) ?? "–"} DKK/kWh</span>
-    </div>
-  `;
+      <span>Cheapest slot: ${s.cheapestSlot?.ep?.toFixed(2) ?? "--"} DKK/kWh</span>
+      <span>Most expensive: ${s.priesiestSlot?.ep?.toFixed(2) ?? "--"} DKK/kWh</span>
+      <span>Average: ${s.avgEp?.toFixed(2) ?? "--"} DKK/kWh</span>
+    </div>`;
 }
 
 function renderScheduleTable() {
   const tbody = document.getElementById("schedule-body");
   if (!tbody) return;
-  const carStatus = state.status.find(c => c.carId === state.selectedPlanCar);
-  const plan = carStatus?.plan ?? [];
+  const plan = state.status.find(c => c.carId === state.selectedPlanCar)?.plan ?? [];
   const now = new Date();
   let lastDay = "";
   tbody.innerHTML = plan.map(s => {
@@ -380,7 +376,7 @@ function renderScheduleTable() {
     return `${dayHeader}<tr class="${s.isPast ? "past" : ""} ${s.charging ? "charging" : ""} ${isNow ? "now-row" : ""}">
       <td>${fmtTime(s.start)}${isNow ? " ◀" : ""}</td>
       <td>${s.ep?.toFixed(2)}</td>
-      <td>${s.isPast ? "–" : s.charging ? "⚡ Charging" : "–"}</td>
+      <td>${s.isPast ? "" : s.charging ? "Charging" : ""}</td>
     </tr>`;
   }).join("");
 }
@@ -391,63 +387,53 @@ async function renderHistory() {
   const filterCar = document.getElementById("history-car-filter")?.value ?? "";
   const sessions = filterCar ? history.filter(s => s.carId === filterCar) : history;
 
-  // Populate filter
   const filterSel = document.getElementById("history-car-filter");
   if (filterSel && filterSel.options.length === 1) {
-    const cars = [...new Set(history.map(s => s.carId))];
-    cars.forEach(carId => {
+    [...new Set(history.map(s => s.carId))].forEach(carId => {
       const name = history.find(s => s.carId === carId)?.carName ?? carId;
       filterSel.innerHTML += `<option value="${carId}">${name}</option>`;
     });
   }
 
-  // Stats row
-  const totalKwh = sessions.reduce((a, s) => a + (s.kwhAdded ?? 0), 0);
+  const totalKwh  = sessions.reduce((a, s) => a + (s.kwhAdded ?? 0), 0);
   const totalCost = sessions.reduce((a, s) => a + (s.estimatedCost ?? 0), 0);
-  const avgPrice = sessions.length ? sessions.reduce((a, s) => a + (s.avgEffectivePrice ?? 0), 0) / sessions.length : 0;
+  const avgPrice  = sessions.length ? sessions.reduce((a, s) => a + (s.avgEffectivePrice ?? 0), 0) / sessions.length : 0;
   document.getElementById("history-stats").innerHTML = `
     <div class="stat-card"><div class="stat-value">${totalKwh.toFixed(1)}</div><div class="stat-label">Total kWh</div></div>
     <div class="stat-card"><div class="stat-value">${totalCost.toFixed(0)}</div><div class="stat-label">Total DKK</div></div>
     <div class="stat-card"><div class="stat-value">${avgPrice.toFixed(2)}</div><div class="stat-label">Avg DKK/kWh</div></div>
-    <div class="stat-card"><div class="stat-value">${sessions.length}</div><div class="stat-label">Sessions</div></div>
-  `;
+    <div class="stat-card"><div class="stat-value">${sessions.length}</div><div class="stat-label">Sessions</div></div>`;
 
-  // Monthly chart
   const monthly = {};
-  sessions.forEach(s => {
-    const m = s.startTime?.slice(0, 7) ?? "unknown";
-    monthly[m] = (monthly[m] ?? 0) + (s.kwhAdded ?? 0);
-  });
+  sessions.forEach(s => { const m = s.startTime?.slice(0, 7) ?? "unknown"; monthly[m] = (monthly[m] ?? 0) + (s.kwhAdded ?? 0); });
   const months = Object.keys(monthly).sort().slice(-6);
   const canvas = document.getElementById("history-chart");
   if (historyChart) historyChart.destroy();
   if (months.length) {
     historyChart = new Chart(canvas, {
       type: "bar",
-      data: { labels: months, datasets: [{ label: "kWh charged", data: months.map(m => monthly[m]), backgroundColor: "rgba(99,179,237,0.7)", borderRadius: 4 }] },
-      options: { responsive: true, plugins: { legend: { display: false } }, scales: { x: { ticks: { color: "#94a3b8" } }, y: { ticks: { color: "#94a3b8" } } } }
+      data: { labels: months, datasets: [{ label: "kWh", data: months.map(m => monthly[m]), backgroundColor: "rgba(0,0,0,0.8)", borderRadius: 2 }] },
+      options: { responsive: true, plugins: { legend: { display: false } }, scales: { x: { ticks: { color: "#a1a1aa" } }, y: { ticks: { color: "#a1a1aa" } } } }
     });
   }
 
-  // Table
   document.getElementById("history-body").innerHTML = [...sessions].reverse().map(s => {
-    const start = new Date(s.startTime);
-    const end = new Date(s.endTime);
+    const start = new Date(s.startTime), end = new Date(s.endTime);
     const dur = Math.round((end - start) / 60000);
     return `<tr>
       <td>${start.toLocaleDateString("en-GB", { day: "numeric", month: "short" })}</td>
       <td>${s.carName}</td>
-      <td>${Math.round(s.startSoc)}% → ${Math.round(s.endSoc)}%</td>
+      <td>${Math.round(s.startSoc)}% to ${Math.round(s.endSoc)}%</td>
       <td>${s.kwhAdded?.toFixed(1)}</td>
       <td>${s.estimatedCost?.toFixed(2)} DKK</td>
       <td>${s.avgEffectivePrice?.toFixed(2)}</td>
       <td>${dur >= 60 ? `${Math.floor(dur/60)}h ${dur%60}m` : `${dur}m`}</td>
     </tr>`;
-  }).join("") || `<tr><td colspan="7" class="empty-row">No sessions recorded yet</td></tr>`;
+  }).join("") || `<tr><td colspan="7" class="empty-row">No sessions yet</td></tr>`;
 }
 
 // ---- Settings ----
-async function renderSettingsView() {
+function renderSettingsView() {
   if (!state.settings) return;
   renderCarsList();
   renderTariffsForm();
@@ -458,40 +444,35 @@ function renderCarsList() {
   const el = document.getElementById("cars-list");
   if (!el) return;
   const cars = state.settings?.cars ?? [];
-  if (!cars.length) { el.innerHTML = `<div class="empty-note">No cars added yet. Click "+ Add car" to get started.</div>`; return; }
+  if (!cars.length) { el.innerHTML = `<div class="empty-note">No cars added yet.</div>`; return; }
   el.innerHTML = cars.map(car => `
     <div class="car-list-item">
       <div class="car-list-info">
         <span class="car-list-name">${car.name}</span>
-        <span class="car-list-meta">${car.battery_kwh} kWh · ${car.charge_kw} kW</span>
+        <span class="car-list-meta">${car.battery_kwh} kWh  ${car.charge_kw} kW AC</span>
       </div>
       <div class="car-list-actions">
         <button class="btn btn-sm" data-edit="${car.id}">Edit</button>
         <button class="btn btn-sm btn-danger" data-delete="${car.id}">Remove</button>
       </div>
-    </div>
-  `).join("");
-  el.querySelectorAll("[data-edit]").forEach(btn => openCarForm(btn.dataset.edit));
+    </div>`).join("");
+  el.querySelectorAll("[data-edit]").forEach(btn => btn.addEventListener("click", () => openCarForm(btn.dataset.edit)));
   el.querySelectorAll("[data-delete]").forEach(btn => btn.addEventListener("click", () => deleteCar(btn.dataset.delete)));
 }
 
 function openCarForm(carId = null) {
   const card = document.getElementById("car-form-card");
-  const title = document.getElementById("car-form-title");
+  document.getElementById("car-form-title").textContent = carId ? "Edit car" : "Add car";
   state.editingCarId = carId;
-  title.textContent = carId ? "Edit car" : "Add car";
   card.style.display = "";
-
   const car = carId ? state.settings.cars.find(c => c.id === carId) : {};
-  document.getElementById("cf-id").value = car?.id ?? "";
-  document.getElementById("cf-id").disabled = !!carId;
-  document.getElementById("cf-name").value = car?.name ?? "";
-  document.getElementById("cf-battery").value = car?.battery_kwh ?? 71.2;
+  document.getElementById("cf-id").value       = car?.id ?? "";
+  document.getElementById("cf-id").disabled    = !!carId;
+  document.getElementById("cf-name").value     = car?.name ?? "";
+  document.getElementById("cf-battery").value  = car?.battery_kwh ?? 71.2;
   document.getElementById("cf-chargekw").value = car?.charge_kw ?? 9.5;
-
-  // Populate entity dropdowns
-  const domains = { "cf-switch": "switch", "cf-soc": "sensor", "cf-plug": "binary_sensor", "cf-power": "sensor", "cf-limit": "number", "cf-solar": "sensor", "cf-consumption": "sensor" };
   const entityKeys = { "cf-switch": "charging_switch", "cf-soc": "soc_entity", "cf-plug": "plug_entity", "cf-power": "power_entity", "cf-limit": "charge_limit_entity", "cf-solar": "solar_power_entity", "cf-consumption": "house_consumption_entity" };
+  const domains    = { "cf-switch": "switch", "cf-soc": "sensor", "cf-plug": "binary_sensor", "cf-power": "sensor", "cf-limit": "number", "cf-solar": "sensor", "cf-consumption": "sensor" };
   Object.entries(domains).forEach(([selId, domain]) => {
     const sel = document.getElementById(selId);
     const entities = state.haEntities.filter(e => e.domain === domain);
@@ -499,22 +480,30 @@ function openCarForm(carId = null) {
       `<option value="${e.entity_id}" ${car?.[entityKeys[selId]] === e.entity_id ? "selected" : ""}>${e.friendly_name}</option>`
     ).join("");
   });
-
   card.scrollIntoView({ behavior: "smooth" });
 }
 
 async function deleteCar(carId) {
-  if (!confirm(`Remove car ${carId}?`)) return;
+  if (!confirm(`Remove ${carId}?`)) return;
   await api("DELETE", `/api/settings/cars/${carId}`);
   state.settings = await api("GET", "/api/settings");
-  renderCarsList();
-  await loadStatus();
+  renderCarsList(); await loadStatus();
 }
 
 function renderTariffsForm() {
   const tariffs = state.settings?.tariffs ?? {};
   document.querySelectorAll(".tf").forEach(inp => {
-    inp.value = tariffs[inp.dataset.key] ?? "";
+    const key = inp.dataset.key;
+    const val = tariffs[key] ?? DEFAULT_TARIFFS[key] ?? 0;
+    inp.value = val;
+    // Show default below the input
+    let hint = inp.nextElementSibling;
+    if (!hint || !hint.classList.contains("default-val")) {
+      hint = document.createElement("div");
+      hint.className = "default-val";
+      inp.after(hint);
+    }
+    hint.textContent = `Default: ${DEFAULT_TARIFFS[key]}`;
   });
 }
 
@@ -526,111 +515,94 @@ function renderNotifForm() {
 }
 
 // ---- Utilities ----
-function fmtTime(isoOrLocal) {
-  return new Date(isoOrLocal).toLocaleTimeString("da-DK", { hour: "2-digit", minute: "2-digit" });
+function fmtTime(iso) {
+  return new Date(iso).toLocaleTimeString("da-DK", { hour: "2-digit", minute: "2-digit" });
 }
 
 // ---- Event listeners ----
 document.addEventListener("DOMContentLoaded", () => {
-  // Navigation
   document.querySelectorAll(".nav-link").forEach(link => {
-    link.addEventListener("click", (e) => {
+    link.addEventListener("click", e => {
       e.preventDefault();
-      const view = link.dataset.view;
       document.querySelectorAll(".nav-link").forEach(l => l.classList.remove("active"));
       document.querySelectorAll(".view").forEach(v => v.classList.remove("active"));
       link.classList.add("active");
-      document.getElementById(`view-${view}`).classList.add("active");
-      if (view === "history") renderHistory();
-      if (view === "settings") renderSettingsView();
+      document.getElementById(`view-${link.dataset.view}`).classList.add("active");
+      if (link.dataset.view === "history")  renderHistory();
+      if (link.dataset.view === "settings") renderSettingsView();
     });
   });
 
-  // Refresh button
   document.getElementById("btn-refresh").addEventListener("click", async () => {
-    await api("POST", "/api/refresh");
-    await loadAll();
+    await api("POST", "/api/refresh"); await loadAll();
   });
 
-  // Execute plan button
   document.getElementById("btn-execute").addEventListener("click", async () => {
     const btn = document.getElementById("btn-execute");
     const result = document.getElementById("execute-result");
-    btn.disabled = true; btn.textContent = "⏳ Running…";
+    btn.disabled = true; btn.textContent = "Running...";
     try {
       const r = await api("POST", `/api/execute/${state.selectedPlanCar}`);
-      result.textContent = r.result ?? "Done";
-      result.className = "execute-result success";
+      result.textContent = r.result ?? "Done"; result.className = "execute-result success";
     } catch (e) {
-      result.textContent = e.message;
-      result.className = "execute-result error";
-    } finally {
-      btn.disabled = false; btn.textContent = "▶ Execute plan now";
-    }
+      result.textContent = e.message; result.className = "execute-result error";
+    } finally { btn.disabled = false; btn.textContent = "Execute plan now"; }
   });
 
-  // Plan car select
-  document.getElementById("plan-car-select").addEventListener("change", async (e) => {
+  document.getElementById("plan-car-select").addEventListener("change", async e => {
     state.selectedPlanCar = e.target.value;
     state.carSettings[state.selectedPlanCar] = await api("GET", `/api/car/${state.selectedPlanCar}/settings`).catch(() => ({}));
     renderPlan();
   });
 
-  // History car filter
   document.getElementById("history-car-filter").addEventListener("change", renderHistory);
-
-  // Add car button
   document.getElementById("btn-add-car").addEventListener("click", () => openCarForm(null));
 
-  // Car form submit
-  document.getElementById("car-form").addEventListener("submit", async (e) => {
+  document.getElementById("car-form").addEventListener("submit", async e => {
     e.preventDefault();
+    const val = id => document.getElementById(id).value;
     const car = {
-      id:                         document.getElementById("cf-id").value.trim(),
-      name:                       document.getElementById("cf-name").value.trim(),
-      battery_kwh:                parseFloat(document.getElementById("cf-battery").value),
-      charge_kw:                  parseFloat(document.getElementById("cf-chargekw").value),
-      charging_switch:            document.getElementById("cf-switch").value || undefined,
-      soc_entity:                 document.getElementById("cf-soc").value || undefined,
-      plug_entity:                document.getElementById("cf-plug").value || undefined,
-      power_entity:               document.getElementById("cf-power").value || undefined,
-      charge_limit_entity:        document.getElementById("cf-limit").value || undefined,
-      solar_power_entity:         document.getElementById("cf-solar").value || undefined,
-      house_consumption_entity:   document.getElementById("cf-consumption").value || undefined,
+      id:                       val("cf-id").trim(),
+      name:                     val("cf-name").trim(),
+      battery_kwh:              parseFloat(val("cf-battery")),
+      charge_kw:                parseFloat(val("cf-chargekw")),
+      charging_switch:          val("cf-switch")      || undefined,
+      soc_entity:               val("cf-soc")         || undefined,
+      plug_entity:              val("cf-plug")         || undefined,
+      power_entity:             val("cf-power")        || undefined,
+      charge_limit_entity:      val("cf-limit")        || undefined,
+      solar_power_entity:       val("cf-solar")        || undefined,
+      house_consumption_entity: val("cf-consumption")  || undefined,
     };
-    if (state.editingCarId) await api("PUT", `/api/settings/cars/${state.editingCarId}`, car);
+    if (state.editingCarId) await api("PUT",  `/api/settings/cars/${state.editingCarId}`, car);
     else                    await api("POST", "/api/settings/cars", car);
     document.getElementById("car-form-card").style.display = "none";
     state.settings = await api("GET", "/api/settings");
-    renderCarsList();
-    await loadStatus();
+    renderCarsList(); await loadStatus();
   });
 
   document.getElementById("cf-cancel").addEventListener("click", () => {
     document.getElementById("car-form-card").style.display = "none";
   });
 
-  // Tariffs form
-  document.getElementById("tariffs-form").addEventListener("submit", async (e) => {
+  document.getElementById("tariffs-form").addEventListener("submit", async e => {
     e.preventDefault();
     const tariffs = {};
     document.querySelectorAll(".tf").forEach(inp => { tariffs[inp.dataset.key] = parseFloat(inp.value); });
     await api("POST", "/api/settings/tariffs", tariffs);
     state.settings = await api("GET", "/api/settings");
-    alert("Tariffs saved ✓");
+    renderTariffsForm();
   });
 
-  // Notifications form
-  document.getElementById("notif-form").addEventListener("submit", async (e) => {
+  document.getElementById("notif-form").addEventListener("submit", async e => {
     e.preventDefault();
     await api("POST", "/api/settings/notifications", {
-      price_published:        document.getElementById("nf-published").checked,
-      charge_complete:        document.getElementById("nf-complete").checked,
-      price_spike_threshold:  parseFloat(document.getElementById("nf-spike").value),
+      price_published:       document.getElementById("nf-published").checked,
+      charge_complete:       document.getElementById("nf-complete").checked,
+      price_spike_threshold: parseFloat(document.getElementById("nf-spike").value),
     });
-    alert("Notifications saved ✓");
   });
 
-  // Boot
-  loadAll().then(() => connectWs());
+  loadAll().then(() => connectWs()).catch(console.error);
 });
+
