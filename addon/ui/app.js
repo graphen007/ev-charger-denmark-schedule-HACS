@@ -554,12 +554,12 @@ function renderTimeline(overridePlan) {
     const inActive  = activeSet.has(slot.start);
     const inPreview = previewSet.has(slot.start);
     if (inActive && inPreview) {
-      // Build a left-right 50/50 gradient using the bar's actual pixel coords
+      // Top half green (current), bottom half indigo (new plan)
       try {
         const bar = ctx.chart.getDatasetMeta(0).data[ctx.dataIndex];
         if (bar) {
-          const { x, width } = bar.getProps(["x", "width"], true);
-          const grad = ctx.chart.ctx.createLinearGradient(x - width / 2, 0, x + width / 2, 0);
+          const { y, base } = bar.getProps(["y", "base"], true);
+          const grad = ctx.chart.ctx.createLinearGradient(0, y, 0, base);
           grad.addColorStop(0,   activeColor);
           grad.addColorStop(0.5, activeColor);
           grad.addColorStop(0.5, previewColor);
