@@ -89,6 +89,8 @@ export class Controller {
     this.carStates.set(car.id, state);
     if (this.priceSlots.length > 0) this.rebuildPlan(car);
     this.broadcast("plug_changed", { carId: car.id, plugged: true });
+    // Start charging immediately rather than waiting up to 5 min for the tick
+    await this.controlCar(car, this.carStates.get(car.id)!);
   }
 
   /** Called when a plug entity transitions to "off". */
@@ -130,14 +132,18 @@ export class Controller {
     this.broadcast("plug_changed", { carId: car.id, plugged: false });
   }
 
-  /** 5-min tick — control charging for all plugged cars. */
+  /** 5-min tick — control charging for all cars. */
   async tick(): Promise<void> {
     const { cars } = loadSettings();
     for (const car of cars) {
       if (!car.charging_switch) continue;
       const state = this.carStates.get(car.id);
-      if (!state?.plugged) continue;
-      await this.controlCar(car, state);
+      // If no plug entity configured, always run — we can't detect plug state
+      const noPlugDetection = !car.plug_entity;
+      if (!noPlugDetection && !state?.plugged) continue;
+      // Ensure state exists
+      const effectiveState = state ?? { plugged: true, plan: [] };
+      await this.controlCar(car, effectiveState);
     }
   }
 
@@ -152,6 +158,12 @@ export class Controller {
     }
 
     const settings = getCarSettings(car.id);
+    console.log(`[Controller] ${car.name}: controlCar mode=${settings.mode} switch=${car.charging_switch}`);
+
+    if (!car.charging_switch) {
+      console.warn(`[Controller] ${car.name}: no charging_switch configured — skipping`);
+      return;
+    }
 
     // Solar surplus mode: react in real-time
     if (settings.mode === "Solar Surplus") {
@@ -178,20 +190,28 @@ export class Controller {
     if (settings.mode === "Off") {
       if (this.ha.getState(car.charging_switch)?.state === "on") {
         await this.ha.callService("switch", "turn_off", { entity_id: car.charging_switch });
+        console.log(`[Controller] ${car.name}: Off — stopped`);
       }
       return;
     }
 
     // Slot-based modes
-    if (!state.plan.length) return;
+    if (!state.plan.length) {
+      console.log(`[Controller] ${car.name}: no plan slots — skipping (prices loaded: ${this.priceSlots.length})`);
+      return;
+    }
     const now = new Date();
     const currentSlot = state.plan.find(
       (s) => now >= s.localDate && now < new Date(s.localDate.getTime() + 15 * 60 * 1000),
     );
-    if (!currentSlot) return;
+    if (!currentSlot) {
+      console.log(`[Controller] ${car.name}: no matching slot for ${now.toTimeString().slice(0,5)}`);
+      return;
+    }
 
     const shouldCharge = currentSlot.charging;
     const isCharging = this.ha.getState(car.charging_switch)?.state === "on";
+    console.log(`[Controller] ${car.name}: slot ${now.toTimeString().slice(0,5)} shouldCharge=${shouldCharge} isCharging=${isCharging}`);
 
     if (shouldCharge && !isCharging) {
       await this.ha.callService("switch", "turn_on", { entity_id: car.charging_switch });
@@ -324,22 +344,29 @@ export class Controller {
 
     const settings = getCarSettings(carId);
 
-    // Re-read plug state from HA directly so we always have the latest value
+    // Re-read plug state from HA directly so we always have the latest value.
+    // If no plug entity is configured we cannot detect plug state — treat as plugged.
     const plugState = car.plug_entity ? this.ha.getState(car.plug_entity)?.state : undefined;
-    const isPlugged = plugState === "on";
+    const isPlugged = car.plug_entity ? plugState === "on" : true;
 
     // If the car is not plugged in and the mode would turn charging on, bail out early.
     // "Off" is still allowed — it ensures the switch is off regardless of plug state.
     if (!isPlugged && settings.mode !== "Off") {
-      // Make sure the switch is off as a safety measure
       if (car.charging_switch && this.ha.getState(car.charging_switch)?.state === "on") {
         await this.ha.callService("switch", "turn_off", { entity_id: car.charging_switch });
       }
       return `${car.name}: not plugged in — nothing to do`;
     }
 
-    const state = this.carStates.get(carId) ?? { plugged: isPlugged, plan: [] };
-    await this.controlCar(car, state);
+    // Update carState so subsequent ticks keep running for this car
+    const existing = this.carStates.get(carId);
+    const state = existing ?? { plugged: isPlugged, plan: [] };
+    if (!existing) {
+      state.plugged = isPlugged;
+      if (this.priceSlots.length > 0) this.rebuildPlan(car);
+      this.carStates.set(carId, state);
+    }
+    await this.controlCar(car, this.carStates.get(carId) ?? state);
     return `${car.name}: executed`;
   }
 }
