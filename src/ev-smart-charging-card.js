@@ -3,7 +3,7 @@ import { cardStyles } from "./styles.js";
 import {
   loadCarSettings,
   saveCarSettings,
-  fetchTodayPrices,
+  fetchTodayAndTomorrowPrices,
   setCharging,
   getLiveSoC,
 } from "./car-manager.js";
@@ -128,7 +128,7 @@ class EvSmartChargingCard extends LitElement {
       this._error = "Mangler nordpool_config_entry i kortets konfiguration.";
       return;
     }
-    this._slots = await fetchTodayPrices(this.hass, configEntry, area);
+    this._slots = await fetchTodayAndTomorrowPrices(this.hass, configEntry, area);
     this._rebuildPlan();
   }
 
@@ -368,10 +368,18 @@ class EvSmartChargingCard extends LitElement {
       return html`<div class="estimate-box loading">Ingen ladeplan – opdater eller vælg en tilstand.</div>`;
     }
     const { kwh_added, final_soc, total_cost, cheapest_slot, priciest_slot, avg_ep } = this._summary;
+    const mode = this._settings?.mode;
+    const dep = this._settings?.departure_time ?? "07:00";
+    const [depH, depM] = dep.split(":").map(Number);
+    const depDate = new Date(); depDate.setHours(depH, depM, 0, 0);
+    if (depDate <= new Date()) depDate.setDate(depDate.getDate() + 1);
+    const depLabel = depDate.toLocaleString("da-DK", { weekday: "short", hour: "2-digit", minute: "2-digit" });
 
     return html`
       <div class="estimate-box">
-        <div class="estimate-title">Estimat – i dag</div>
+        <div class="estimate-title">
+          ${mode === "Afgang-plan" ? `Estimat – til afgang ${depLabel}` : "Estimat – fra nu"}
+        </div>
         <div class="estimate-main">+${this._fmt(kwh_added, 1)} kWh → ${Math.round(final_soc)}% SoC</div>
         <div class="estimate-sub">Estimeret pris: ~${this._fmt(total_cost)} kr</div>
         <div class="estimate-stats">
@@ -386,39 +394,49 @@ class EvSmartChargingCard extends LitElement {
   _renderTimeline() {
     if (this._plan.length === 0) return nothing;
 
-    // Build hourly groups (4 slots per hour)
+    // Group into hours; keep day boundary info
     const hourGroups = [];
     for (let i = 0; i < this._plan.length; i += 4) {
       const group = this._plan.slice(i, i + 4);
       const charging = group.some((s) => s.charging);
+      const isPast = group.every((s) => s.isPast);
       const avgEp = group.reduce((s, x) => s + x.ep, 0) / group.length;
-      hourGroups.push({ start: group[0].start, charging, avgEp });
+      hourGroups.push({ start: group[0].start, localDate: group[0].localDate, charging, isPast, avgEp });
     }
 
     const allEp = hourGroups.map((g) => g.avgEp);
     const minEp = Math.min(...allEp);
     const maxEp = Math.max(...allEp);
     const now = new Date();
+    const todayStr = now.toDateString();
+
+    // Split into today / tomorrow groups for labels
+    const todayGroups = hourGroups.filter((g) => g.localDate.toDateString() === todayStr);
+    const tomorrowGroups = hourGroups.filter((g) => g.localDate.toDateString() !== todayStr);
+
+    const renderBar = (groups) => groups.map((g) => {
+      const relEp = maxEp > minEp ? (g.avgEp - minEp) / (maxEp - minEp) : 0;
+      const isNow = g.localDate <= now && now < new Date(g.localDate.getTime() + 3600000);
+      return html`<div
+        class="timeline-slot ${g.isPast ? "past" : ""} ${g.charging ? "charging" : ""} ${g.charging && relEp < 0.33 ? "cheap" : ""} ${g.charging && relEp > 0.66 ? "peak" : ""}"
+        title="${this._formatTime(g.start)}: ${this._fmt(g.avgEp)} kr/kWh${g.charging ? " – LADER" : ""}${g.isPast ? " (forbi)" : ""}"
+        style="${isNow ? "outline: 2px solid var(--primary-text-color);" : ""}"
+      ></div>`;
+    });
 
     return html`
       <div class="timeline-wrap">
-        <div class="section-label">Ladeplan – ${new Date().toLocaleDateString("da-DK", { weekday: "short", day: "numeric", month: "short" })}</div>
-        <div class="timeline-bar">
-          ${hourGroups.map((g) => {
-            const relEp = maxEp > minEp ? (g.avgEp - minEp) / (maxEp - minEp) : 0;
-            const isPeak = relEp > 0.66;
-            const isCheap = relEp < 0.33;
-            const isNow = new Date(g.start) <= now && now < new Date(new Date(g.start).getTime() + 60 * 60 * 1000);
-            return html`<div
-              class="timeline-slot ${g.charging ? "charging" : ""} ${g.charging && isCheap ? "cheap" : ""} ${g.charging && isPeak ? "peak" : ""}"
-              title="${this._formatTime(g.start)}: ${this._fmt(g.avgEp)} kr/kWh${g.charging ? " – LADER" : ""}"
-              style="${isNow ? "outline: 2px solid var(--primary-text-color);" : ""}"
-            ></div>`;
-          })}
-        </div>
-        <div class="timeline-labels">
-          <span>00:00</span><span>06:00</span><span>12:00</span><span>18:00</span><span>24:00</span>
-        </div>
+        <div class="section-label">Ladeplan</div>
+        ${todayGroups.length ? html`
+          <div class="timeline-day-label">${now.toLocaleDateString("da-DK", { weekday: "short", day: "numeric", month: "short" })} (i dag)</div>
+          <div class="timeline-bar">${renderBar(todayGroups)}</div>
+          <div class="timeline-labels"><span>00</span><span>06</span><span>12</span><span>18</span><span>24</span></div>
+        ` : nothing}
+        ${tomorrowGroups.length ? html`
+          <div class="timeline-day-label">${tomorrowGroups[0].localDate.toLocaleDateString("da-DK", { weekday: "short", day: "numeric", month: "short" })} (i morgen)</div>
+          <div class="timeline-bar">${renderBar(tomorrowGroups)}</div>
+          <div class="timeline-labels"><span>00</span><span>06</span><span>12</span><span>18</span><span>24</span></div>
+        ` : html`<div class="estimate-sub" style="margin:4px 16px;opacity:.6">Morgendagens priser tilgængelige ~13:00</div>`}
       </div>
 
       <button class="table-toggle" @click=${() => { this._showTable = !this._showTable; }}>
@@ -430,6 +448,7 @@ class EvSmartChargingCard extends LitElement {
   }
 
   _renderTable(hourGroups, now) {
+    let lastDay = null;
     return html`
       <table class="price-table">
         <thead>
@@ -437,12 +456,15 @@ class EvSmartChargingCard extends LitElement {
         </thead>
         <tbody>
           ${hourGroups.map((g) => {
-            const isNow = new Date(g.start) <= now && now < new Date(new Date(g.start).getTime() + 60 * 60 * 1000);
+            const dayStr = g.localDate.toLocaleDateString("da-DK", { weekday: "short", day: "numeric", month: "short" });
+            const dayHeader = dayStr !== lastDay ? ((lastDay = dayStr), html`<tr class="day-header-row"><td colspan="3">${dayStr}</td></tr>`) : nothing;
+            const isNow = g.localDate <= now && now < new Date(g.localDate.getTime() + 3600000);
             return html`
-              <tr class="${g.charging ? "charging-row" : ""} ${isNow ? "now-row" : ""}">
-                <td>${this._formatTime(g.start)}${isNow ? " ←" : ""}</td>
+              ${dayHeader}
+              <tr class="${g.isPast ? "past-row" : ""} ${g.charging ? "charging-row" : ""} ${isNow ? "now-row" : ""}">
+                <td>${this._formatTime(g.start)}${isNow ? " ◀" : ""}</td>
                 <td>${this._fmt(g.avgEp)}</td>
-                <td>${g.charging ? html`<span class="charge-dot"></span>Lader` : "–"}</td>
+                <td>${g.isPast ? html`<span style="opacity:.4">–</span>` : g.charging ? html`<span class="charge-dot"></span>Lader` : "–"}</td>
               </tr>
             `;
           })}

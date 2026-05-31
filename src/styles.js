@@ -309,6 +309,10 @@ export const cardStyles = css`
     transition: background 0.3s;
   }
 
+  .timeline-slot.past {
+    opacity: 0.3;
+  }
+
   .timeline-slot.charging {
     background: var(--primary-color);
   }
@@ -319,6 +323,28 @@ export const cardStyles = css`
 
   .timeline-slot.charging.peak {
     background: var(--warning-color, #ff9800);
+  }
+
+  .timeline-day-label {
+    font-size: 0.78em;
+    font-weight: 600;
+    color: var(--secondary-text-color);
+    margin: 10px 0 4px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+
+  .day-header-row td {
+    font-size: 0.78em;
+    font-weight: 600;
+    color: var(--secondary-text-color);
+    padding: 8px 6px 2px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+
+  .past-row {
+    opacity: 0.4;
   }
 
   .timeline-labels {

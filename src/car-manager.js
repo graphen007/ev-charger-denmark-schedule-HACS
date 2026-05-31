@@ -75,37 +75,45 @@ export async function saveCarSettings(hass, carId, settings) {
   }
 }
 
-/**
- * Fetches today's Nord Pool prices via the nordpool.get_prices_for_date service.
- * Returns array of { start: ISO string, value: DKK/kWh } sorted by start.
- */
-export async function fetchTodayPrices(hass, configEntry, area = "DK1") {
-  const today = new Date();
-  const dateStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
-
+/** Fetches Nord Pool prices for a specific date string (YYYY-MM-DD). */
+async function fetchPricesForDate(hass, configEntry, area, dateStr) {
   try {
     const result = await hass.callService(
       "nordpool",
       "get_prices_for_date",
-      {
-        date: dateStr,
-        areas: area,
-        currency: "DKK",
-        config_entry: configEntry,
-      },
-      undefined,  // target
-      undefined,  // notifyOnError
-      true        // returnResponse
+      { date: dateStr, areas: area, currency: "DKK", config_entry: configEntry },
+      undefined, undefined, true
     );
-
     const raw = result?.response?.[area] ?? result?.[area] ?? [];
     return raw
-      .map((item) => ({ start: item.start, value: item.price }))
+      .map((item) => ({ start: item.start, value: item.price / 1000 }))  // MWh → kWh
       .sort((a, b) => a.start.localeCompare(b.start));
   } catch (e) {
-    console.error("[ev-charging] Failed to fetch prices:", e);
+    console.warn("[ev-charging] No prices for", dateStr, e?.message);
     return [];
   }
+}
+
+function fmtDate(d) {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+/**
+ * Fetches today + tomorrow's Nord Pool prices combined.
+ * Returns array of { start: ISO string, value: DKK/kWh } sorted by start time.
+ * Tomorrow's prices may be empty before ~13:00 when they are published.
+ */
+export async function fetchTodayAndTomorrowPrices(hass, configEntry, area = "DK1") {
+  const today = new Date();
+  const tomorrow = new Date(today);
+  tomorrow.setDate(tomorrow.getDate() + 1);
+
+  const [todaySlots, tomorrowSlots] = await Promise.all([
+    fetchPricesForDate(hass, configEntry, area, fmtDate(today)),
+    fetchPricesForDate(hass, configEntry, area, fmtDate(tomorrow)),
+  ]);
+
+  return [...todaySlots, ...tomorrowSlots].sort((a, b) => a.start.localeCompare(b.start));
 }
 
 /**
