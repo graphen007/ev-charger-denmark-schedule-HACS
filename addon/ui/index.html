@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>EV Charging</title>
-  <link rel="stylesheet" href="styles.css?v=2.4.3" />
+  <link rel="stylesheet" href="styles.css?v=2.4.4" />
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.2/dist/chart.umd.min.js"></script>
 </head>
 <body>
@@ -88,10 +88,18 @@
 
         <section class="section">
           <details>
-            <summary class="schedule-toggle">15-minute schedule</summary>
+            <summary class="schedule-toggle">Current plan</summary>
             <table class="data-table" id="schedule-table">
               <thead><tr><th>Time</th><th>DKK/kWh</th><th>Status</th></tr></thead>
               <tbody id="schedule-body"></tbody>
+            </table>
+          </details>
+          <details id="preview-details" style="margin-top:.75rem">
+            <summary class="schedule-toggle">Preview — new plan (unsaved settings)</summary>
+            <div id="plan-estimate-preview"></div>
+            <table class="data-table" id="preview-table">
+              <thead><tr><th>Time</th><th>DKK/kWh</th><th>Status</th></tr></thead>
+              <tbody id="preview-body"></tbody>
             </table>
           </details>
         </section>
@@ -224,6 +232,6 @@
 
     </main>
   </div>
-  <script src="app.js?v=2.4.3"></script>
+  <script src="app.js?v=2.4.4"></script>
 </body>
 </html>

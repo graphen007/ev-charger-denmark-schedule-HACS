@@ -346,6 +346,9 @@ export class Controller {
   getPriceSlots(): PriceSlot[] { return this.priceSlots; }
   getLastPriceError(): string | null { return this.lastPriceError; }
   getCarState(carId: string): CarState | undefined { return this.carStates.get(carId); }
+  getLiveCarData(car: CarConfig): { soc: number; solarSurplusKw: number } {
+    return { soc: this.getSoc(car), solarSurplusKw: this.getSolarSurplusKw(car) };
+  }
 
   getAllStatus() {
     const { cars } = loadSettings();

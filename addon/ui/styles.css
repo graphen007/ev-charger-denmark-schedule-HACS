@@ -304,6 +304,8 @@ html, body {
   padding: 4px 0;
 }
 .schedule-toggle::marker, .schedule-toggle::-webkit-details-marker { display: none; }
+.preview-summary { font-size: 0.8rem; color: var(--gray-400); padding: 6px 0 2px; }
+.preview-summary strong { color: var(--indigo); }
 
 /* ===== Data tables ===== */
 .data-table { width: 100%; border-collapse: collapse; font-size: 0.82rem; margin-top: 0.75rem; }

@@ -10,6 +10,7 @@ import {
 } from "./settings.js";
 import { fetchForecast } from "./priceClient.js";
 import type { CarConfig } from "./planner.js";
+import { buildChargePlan } from "./planner.js";
 
 export function createWebServer(controller: Controller, ha: HaClient) {
   const app = express();
@@ -100,8 +101,20 @@ export function createWebServer(controller: Controller, ha: HaClient) {
   app.get("/api/car/:carId/settings", (req, res) => res.json(getCarSettings(req.params.carId)));
   app.post("/api/car/:carId/settings", (req, res) => {
     saveCarSettings(req.params.carId, req.body);
-    // Settings saved — plan is NOT rebuilt here; use Execute Plan Now to apply
+    // Settings saved — plan is NOT rebuilt here; use Apply Plan to apply
     res.json({ ok: true });
+  });
+
+  // ---- Preview plan (dry-run with current saved settings, does not apply) ----
+  app.get("/api/car/:carId/preview-plan", (req, res) => {
+    const { cars, tariffs } = loadSettings();
+    const car = cars.find(c => c.id === req.params.carId);
+    if (!car) { res.status(404).json({ error: "Car not found" }); return; }
+    const settings = getCarSettings(req.params.carId);
+    const prices = controller.getPriceSlots();
+    const { soc: currentSoc, solarSurplusKw } = controller.getLiveCarData(car);
+    const plan = buildChargePlan(prices, settings, tariffs ?? {}, currentSoc, car.battery_kwh, car.charge_kw, solarSurplusKw);
+    res.json({ plan, settings });
   });
 
   // ---- Car diagnostic test ----

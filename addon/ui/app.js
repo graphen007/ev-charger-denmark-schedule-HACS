@@ -124,7 +124,9 @@ async function loadForecast() {
 }
 
 function renderAll() {
-  renderDashboard(); renderPlan(); renderSettingsView();
+  renderDashboard(); renderPlan();
+  // Only re-render settings if that view is currently visible (avoids entity-picker thrash on every poll)
+  if (document.getElementById("view-settings")?.classList.contains("active")) renderSettingsView();
 }
 
 // ---- Dashboard ----
@@ -502,6 +504,7 @@ function peakRateApprox(startTime) {
 
 function renderPlan() {
   renderPlanCarSelect(); renderModeGrid(); renderModeSettings(); renderPlanEstimate(); renderTimeline(); renderScheduleTable();
+  loadAndRenderPreview();
 }
 
 function renderTimeline() {
@@ -592,7 +595,8 @@ function renderModeGrid() {
     const cs2 = { ...(state.carSettings[state.selectedPlanCar] ?? {}), mode: btn.dataset.mode };
     state.carSettings[state.selectedPlanCar] = cs2;
     await api("POST", `/api/car/${state.selectedPlanCar}/settings`, cs2);
-    renderModes(); renderModeSettings();  // update UI only — plan stays until Execute
+    renderModes(); renderModeSettings();
+    loadAndRenderPreview();
   }));
 }
 
@@ -634,7 +638,7 @@ function renderModeSettings() {
       const cs2 = { ...(state.carSettings[state.selectedPlanCar] ?? {}), [inp.dataset.key]: parseFloat(inp.value) };
       state.carSettings[state.selectedPlanCar] = cs2;
       await api("POST", `/api/car/${state.selectedPlanCar}/settings`, cs2);
-      // No plan rebuild — press "Apply Plan" to update the schedule
+      loadAndRenderPreview();
     });
   });
   el.querySelector("#sr-max_price_cap")?.addEventListener("change", async e => {
@@ -642,25 +646,25 @@ function renderModeSettings() {
     const cs2 = { ...(state.carSettings[state.selectedPlanCar] ?? {}), max_price_cap: isNaN(val) ? 0 : val };
     state.carSettings[state.selectedPlanCar] = cs2;
     await api("POST", `/api/car/${state.selectedPlanCar}/settings`, cs2);
-    renderModeSettings();
+    renderModeSettings(); loadAndRenderPreview();
   });
   el.querySelector("#sr-cap-clear")?.addEventListener("click", async () => {
     const cs2 = { ...(state.carSettings[state.selectedPlanCar] ?? {}), max_price_cap: 0 };
     state.carSettings[state.selectedPlanCar] = cs2;
     await api("POST", `/api/car/${state.selectedPlanCar}/settings`, cs2);
-    renderModeSettings();
+    renderModeSettings(); loadAndRenderPreview();
   });
   el.querySelector("#sr-deadline_time")?.addEventListener("change", async e => {
     const cs2 = { ...(state.carSettings[state.selectedPlanCar] ?? {}), deadline_time: e.target.value };
     state.carSettings[state.selectedPlanCar] = cs2;
     await api("POST", `/api/car/${state.selectedPlanCar}/settings`, cs2);
-    renderModeSettings();
+    renderModeSettings(); loadAndRenderPreview();
   });
   el.querySelector("#sr-deadline-clear")?.addEventListener("click", async () => {
     const cs2 = { ...(state.carSettings[state.selectedPlanCar] ?? {}), deadline_time: "" };
     state.carSettings[state.selectedPlanCar] = cs2;
     await api("POST", `/api/car/${state.selectedPlanCar}/settings`, cs2);
-    renderModeSettings();
+    renderModeSettings(); loadAndRenderPreview();
   });
 }
 
@@ -687,23 +691,48 @@ function renderPlanEstimate() {
     </div>`;
 }
 
-function renderScheduleTable() {
-  const tbody = document.getElementById("schedule-body");
-  if (!tbody) return;
-  const plan = state.status.find(c => c.carId === state.selectedPlanCar)?.plan ?? [];
+function planTableRows(plan) {
   const now = new Date();
   let lastDay = "";
-  tbody.innerHTML = plan.map(s => {
+  return plan.map(s => {
     const dt = new Date(s.start);
     const dayStr = dt.toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" });
     const dayHeader = dayStr !== lastDay ? ((lastDay = dayStr), `<tr class="day-row"><td colspan="3">${dayStr}</td></tr>`) : "";
     const isNow = dt <= now && now < new Date(dt.getTime() + 15 * 60000);
     return `${dayHeader}<tr class="${s.isPast ? "past" : ""} ${s.charging ? "charging" : ""} ${isNow ? "now-row" : ""}">
-      <td>${fmtTime(s.start)}${isNow ? " &lt;" : ""}</td>
+      <td>${fmtTime(s.start)}${isNow ? " ◀" : ""}</td>
       <td>${s.ep?.toFixed(2)}</td>
       <td>${s.isPast ? "" : s.charging ? "Charging" : ""}</td>
     </tr>`;
   }).join("");
+}
+
+function renderScheduleTable() {
+  const tbody = document.getElementById("schedule-body");
+  if (!tbody) return;
+  const plan = state.status.find(c => c.carId === state.selectedPlanCar)?.plan ?? [];
+  tbody.innerHTML = planTableRows(plan);
+}
+
+async function loadAndRenderPreview() {
+  if (!state.selectedPlanCar) return;
+  const details = document.getElementById("preview-details");
+  try {
+    const { plan, settings } = await api("GET", `/api/car/${state.selectedPlanCar}/preview-plan`);
+    const chargingSlots = plan.filter(s => s.charging);
+    const totalKwh = chargingSlots.length * 0.25 * ((state.settings?.cars?.find(c => c.id === state.selectedPlanCar)?.charge_kw) ?? 0);
+    const avgEp = chargingSlots.length ? chargingSlots.reduce((a, s) => a + s.ep, 0) / chargingSlots.length : 0;
+    const totalCost = chargingSlots.reduce((a, s) => a + s.ep * 0.25 * ((state.settings?.cars?.find(c => c.id === state.selectedPlanCar)?.charge_kw) ?? 0), 0);
+    document.getElementById("plan-estimate-preview").innerHTML = `
+      <div class="preview-summary">
+        Mode: <strong>${settings.mode}</strong> &nbsp;·&nbsp;
+        ${chargingSlots.length} slots · ~${totalKwh.toFixed(1)} kWh · ~${totalCost.toFixed(2)} DKK · avg ${avgEp.toFixed(2)} DKK/kWh
+      </div>`;
+    document.getElementById("preview-body").innerHTML = planTableRows(plan);
+    if (details) details.style.display = "";
+  } catch {
+    if (details) details.style.display = "none";
+  }
 }
 
 // ---- History ----
