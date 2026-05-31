@@ -370,24 +370,26 @@ function getBestWindowTonight(carId) {
   const now = new Date();
   const tariffs = state.settings?.tariffs ?? {};
   const cs = state.carSettings[carId] ?? {};
-  const hours = cs.cheapest_hours ?? 4;
-  const cutoff = new Date(now); cutoff.setDate(cutoff.getDate() + 1); cutoff.setHours(6, 0, 0, 0);
-  const future = state.prices
-    .filter(s => { const dt = new Date(s.start); return dt >= now && dt < cutoff; })
-    .map(s => ({ ep: computeEp(s.value, new Date(s.start), tariffs), dt: new Date(s.start) }));
-  if (future.length < 4) return null;
-  const nSlots = Math.min(hours * 4, future.length);
-  const cheapest = [...future].sort((a, b) => a.ep - b.ep).slice(0, nSlots).sort((a, b) => a.dt - b.dt);
-  const startDt = cheapest[0].dt;
-  const endDt   = new Date(cheapest[cheapest.length - 1].dt.getTime() + 15 * 60000);
-  const avgEp   = cheapest.reduce((sum, s) => sum + s.ep, 0) / cheapest.length;
   const carConfig  = state.settings?.cars?.find(c => c.id === carId);
   const chargeKw   = carConfig?.charge_kw   ?? 9.5;
   const batteryKwh = carConfig?.battery_kwh ?? 71.2;
   const carStatus  = state.status.find(c => c.carId === carId);
   const currentSoc = carStatus?.soc ?? cs.manual_soc ?? 20;
-  const kwhNeeded  = Math.min(chargeKw * hours, Math.max(0, (cs.charge_limit ?? 100 - currentSoc) / 100 * batteryKwh));
-  return { startDt, endDt, avgEp, kwhNeeded, estCost: kwhNeeded * avgEp };
+  const targetSoc  = Math.min(cs.target_soc ?? 80, cs.charge_limit ?? 100);
+  const neededKwh  = Math.max(0, ((targetSoc - currentSoc) / 100) * batteryKwh);
+  const hours      = neededKwh / chargeKw;
+  const cutoff = new Date(now); cutoff.setDate(cutoff.getDate() + 1); cutoff.setHours(6, 0, 0, 0);
+  const future = state.prices
+    .filter(s => { const dt = new Date(s.start); return dt >= now && dt < cutoff; })
+    .map(s => ({ ep: computeEp(s.value, new Date(s.start), tariffs), dt: new Date(s.start) }));
+  if (future.length < 4) return null;
+  const nSlots = Math.min(Math.ceil(hours * 4), future.length);
+  if (nSlots === 0) return null;
+  const cheapest = [...future].sort((a, b) => a.ep - b.ep).slice(0, nSlots).sort((a, b) => a.dt - b.dt);
+  const startDt = cheapest[0].dt;
+  const endDt   = new Date(cheapest[cheapest.length - 1].dt.getTime() + 15 * 60000);
+  const avgEp   = cheapest.reduce((sum, s) => sum + s.ep, 0) / cheapest.length;
+  return { startDt, endDt, avgEp, kwhNeeded: neededKwh, estCost: neededKwh * avgEp };
 }
 
 // Approximate what a session would have cost at the peak tariff rate for that month.
@@ -507,7 +509,7 @@ function renderModeSettings() {
   if (!mode || mode === "Charge Now" || mode === "Off" || mode === "Solar Surplus") { card.style.display = "none"; return; }
   card.style.display = "";
   let html = "";
-  if (mode === "Cheapest Hours")   html += slider("cheapest_hours",  "Cheapest hours",      cs.cheapest_hours  ?? 4,    1,   12,  1,    "hrs");
+  if (mode === "Cheapest Hours")   html += slider("target_soc",       "Target SoC",          cs.target_soc      ?? 80,   10,  100, 5,    "%");
   if (mode === "Below Threshold")  html += slider("price_threshold", "Price ceiling",        cs.price_threshold ?? 0.5,  0.1, 5.0, 0.05, "DKK/kWh");
   if (mode === "Departure Plan") {
     html += `<div class="setting-row"><label>Departure time</label><input type="time" id="sr-departure_time" value="${cs.departure_time ?? "07:00"}" /></div>`;

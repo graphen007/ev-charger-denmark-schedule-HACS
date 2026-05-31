@@ -127,7 +127,13 @@ export function buildChargePlan(
     future.forEach((s) => charging.add(s.start));
 
   } else if (mode === "Cheapest Hours") {
-    [...future].sort((a, b) => a.ep - b.ep).slice(0, cheapest_hours * 4).forEach((s) => charging.add(s.start));
+    // Calculate how many slots are needed to reach target_soc from current SoC
+    const targetSocActual = Math.min(target_soc, charge_limit);
+    const neededKwh = Math.max(0, ((targetSocActual - currentSoc) / 100) * batterKwh);
+    const slotsNeeded = Math.ceil((neededKwh / chargeKw) * 4);
+    if (slotsNeeded > 0) {
+      [...future].sort((a, b) => a.ep - b.ep).slice(0, slotsNeeded).forEach((s) => charging.add(s.start));
+    }
 
   } else if (mode === "Below Threshold") {
     future.filter((s) => s.ep <= price_threshold).forEach((s) => charging.add(s.start));
