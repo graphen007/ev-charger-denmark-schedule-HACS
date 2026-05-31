@@ -434,7 +434,125 @@ export const cardStyles = css`
     color: var(--primary-text-color);
   }
 
-  /* ---- Error / loading ---- */
+  /* ---- Execute button ---- */
+  .execute-wrap {
+    margin: 12px 0 4px;
+    text-align: center;
+  }
+
+  .execute-btn {
+    width: 100%;
+    padding: 14px;
+    background: var(--primary-color);
+    color: var(--text-primary-color, #fff);
+    border: none;
+    border-radius: 10px;
+    font-size: 1em;
+    font-weight: 700;
+    cursor: pointer;
+    transition: opacity 0.2s;
+  }
+
+  .execute-btn:disabled { opacity: 0.5; cursor: default; }
+  .execute-btn.executing { opacity: 0.7; }
+
+  .action-status {
+    margin-top: 8px;
+    font-size: 0.85em;
+    padding: 6px 10px;
+    border-radius: 6px;
+    background: var(--secondary-background-color);
+    color: var(--primary-text-color);
+  }
+
+  .action-status.action-started { color: var(--success-color, #4caf50); }
+  .action-status.action-stopped { color: var(--warning-color, #ff9800); }
+  .action-status.action-ok { color: var(--info-color, #2196f3); }
+
+  .auto-note {
+    font-size: 0.72em;
+    color: var(--secondary-text-color);
+    margin-top: 4px;
+  }
+
+  /* ---- Next charge banner ---- */
+  .next-charge {
+    background: var(--secondary-background-color);
+    border-radius: 8px;
+    padding: 10px 14px;
+    font-size: 0.88em;
+    color: var(--primary-text-color);
+    margin-bottom: 10px;
+  }
+
+  .next-charge.charging-now {
+    background: var(--success-color, #4caf50);
+    color: #fff;
+    font-weight: 600;
+  }
+
+  /* ---- Price bar chart ---- */
+  .price-chart-wrap {
+    margin: 14px 0 4px;
+  }
+
+  .chart-section {
+    margin-top: 8px;
+  }
+
+  .chart-section-label {
+    font-size: 0.75em;
+    color: var(--secondary-text-color);
+    margin-bottom: 4px;
+  }
+
+  .price-chart {
+    display: flex;
+    align-items: flex-end;
+    gap: 2px;
+    height: 64px;
+  }
+
+  .price-bar-col {
+    flex: 1;
+    height: 100%;
+    display: flex;
+    align-items: flex-end;
+  }
+
+  .price-bar-inner {
+    width: 100%;
+    border-radius: 3px 3px 0 0;
+    background: var(--secondary-text-color, #888);
+    transition: height 0.3s;
+    opacity: 0.85;
+  }
+
+  .price-bar-inner.charging { background: var(--success-color, #4caf50); opacity: 1; }
+  .price-bar-inner.past { opacity: 0.3; }
+  .price-bar-inner.now { outline: 2px solid var(--primary-color); outline-offset: 1px; }
+
+  .chart-axis {
+    display: flex;
+    justify-content: space-between;
+    font-size: 0.68em;
+    color: var(--secondary-text-color);
+    margin-top: 2px;
+  }
+
+  /* ---- Savings highlight ---- */
+  .savings {
+    color: var(--success-color, #4caf50);
+    font-weight: 600;
+  }
+
+  .price-chip-note {
+    font-size: 0.68em;
+    color: var(--secondary-text-color);
+    text-align: center;
+    margin-top: 4px;
+    padding: 0 8px;
+  }
   .error-box {
     background: var(--error-color, #f44336);
     color: #fff;

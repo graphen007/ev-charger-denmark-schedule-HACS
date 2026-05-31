@@ -72,19 +72,19 @@ export function buildChargePlan(slots, mode, settings, tariffs) {
   const future = annotated.filter((s) => s.isFuture);
   const charging = new Set();
 
-  if (mode === "Lad nu") {
+  if (mode === "Charge Now") {
     future.forEach((s) => charging.add(s.i));
 
-  } else if (mode === "Billigste timer") {
+  } else if (mode === "Cheapest Hours") {
     [...future]
       .sort((a, b) => a.ep - b.ep)
       .slice(0, cheapest_hours * 4)
       .forEach((s) => charging.add(s.i));
 
-  } else if (mode === "Under grænse") {
+  } else if (mode === "Below Threshold") {
     future.filter((s) => s.ep <= price_threshold).forEach((s) => charging.add(s.i));
 
-  } else if (mode === "Afgang-plan") {
+  } else if (mode === "Departure Plan") {
     const [depH, depM] = departure_time.split(":").map(Number);
     const dep = new Date();
     dep.setHours(depH, depM, 0, 0);
@@ -99,7 +99,7 @@ export function buildChargePlan(slots, mode, settings, tariffs) {
       pick.forEach((s) => charging.add(s.i));
     }
   }
-  // "Slukket" — nothing charged
+  // "Off" — nothing charged
 
   return annotated.map((s) => ({
     start: s.start,
@@ -117,9 +117,15 @@ export function buildChargePlan(slots, mode, settings, tariffs) {
 export function planSummary(plan, settings) {
   const { current_soc = 20, battery_kwh = 71.2, charge_kw = 9.5 } = settings;
   const chargingSlots = plan.filter((s) => s.charging && !s.isPast);
-  const kwh_added = Math.min((chargingSlots.length / 4) * charge_kw, battery_kwh * (1 - current_soc / 100));
+
+  const max_possible_kwh = (chargingSlots.length / 4) * charge_kw;
+  const remaining_kwh = battery_kwh * (1 - current_soc / 100);
+  const kwh_added = Math.min(max_possible_kwh, remaining_kwh);
   const final_soc = Math.min(100, current_soc + (kwh_added / battery_kwh) * 100);
-  const total_cost = chargingSlots.reduce((sum, s) => sum + (s.ep * charge_kw) / 4, 0);
+
+  // Cost: only pay for kWh actually added. Use cheapest slots first (they were already selected as cheapest).
+  const utilization = max_possible_kwh > 0 ? kwh_added / max_possible_kwh : 0;
+  const total_cost = chargingSlots.reduce((sum, s) => sum + (s.ep * charge_kw) / 4, 0) * utilization;
 
   const fp = plan.filter((s) => !s.isPast);
   if (!fp.length) return { kwh_added, final_soc, total_cost, cheapest_slot: null, priciest_slot: null, avg_ep: 0 };
