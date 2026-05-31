@@ -191,6 +191,15 @@ function renderPriceChart() {
     </div><canvas id="price-chart" style="display:none"></canvas>`;
     return;
   }
+  const isDark = document.documentElement.dataset.theme === "dark" ||
+    (document.documentElement.dataset.theme !== "light" && window.matchMedia("(prefers-color-scheme: dark)").matches);
+
+  const textColor    = isDark ? "#a1a1aa" : "#71717a";
+  const gridColor    = isDark ? "rgba(255,255,255,0.06)" : "rgba(0,0,0,0.05)";
+  const pastColor    = isDark ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.08)";
+  const defaultColor = isDark ? "rgba(255,255,255,0.18)" : "rgba(0,0,0,0.15)";
+  const chargeColor  = "rgba(74,222,128,0.85)";
+
   const now = new Date();
   const tariffs = state.settings?.tariffs ?? {};
   const planSlots = state.status?.[0]?.plan ?? [];
@@ -203,9 +212,9 @@ function renderPriceChart() {
 
   const epData = slots.map(s => parseFloat(s.ep.toFixed(3)));
   const bgColors = slots.map(s => {
-    if (s.dt < now) return "rgba(0,0,0,0.08)";
-    if (chargingSet.has(s.start)) return "rgba(22,163,74,0.85)";
-    return "rgba(0,0,0,0.15)";
+    if (s.dt < now) return pastColor;
+    if (chargingSet.has(s.start)) return chargeColor;
+    return defaultColor;
   });
 
   if (priceChart) priceChart.destroy();
@@ -222,8 +231,8 @@ function renderPriceChart() {
         tooltip: { callbacks: { label: ctx => `${ctx.raw} DKK/kWh${chargingSet.has(slots[ctx.dataIndex].start) ? " — charging" : ""}` } }
       },
       scales: {
-        x: { ticks: { maxTicksLimit: 12, color: "#a1a1aa", font: { size: 11 } }, grid: { display: false } },
-        y: { ticks: { color: "#a1a1aa", font: { size: 11 } }, grid: { color: "rgba(0,0,0,0.05)" } },
+        x: { ticks: { maxTicksLimit: 12, color: textColor, font: { size: 11 } }, grid: { display: false } },
+        y: { ticks: { color: textColor, font: { size: 11 } }, grid: { color: gridColor } },
       },
       animation: { duration: 200 },
     },
@@ -696,6 +705,7 @@ document.addEventListener("DOMContentLoaded", () => {
     const isDark = html.dataset.theme === "dark";
     html.dataset.theme = isDark ? "light" : "dark";
     localStorage.setItem("ev-theme", html.dataset.theme);
+    renderPriceChart(); // rebuild with correct dark/light colors
   });
 
   document.querySelectorAll(".nav-link").forEach(link => {
