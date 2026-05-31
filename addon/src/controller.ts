@@ -57,7 +57,7 @@ export class Controller {
     return Math.max(0, (solar - consumption) / 1000); // assume W → kW
   }
 
-  private rebuildPlan(car: CarConfig): Slot[] {
+  rebuildPlan(car: CarConfig): Slot[] {
     const settings = getCarSettings(car.id);
     const soc = this.getSoc(car);
     const solarSurplusKw = this.getSolarSurplusKw(car);

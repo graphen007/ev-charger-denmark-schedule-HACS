@@ -304,8 +304,68 @@ function renderSmartTip() {
 
 // ---- Plan view ----
 function renderPlan() {
-  renderPlanCarSelect(); renderModeGrid(); renderModeSettings(); renderPlanEstimate(); renderScheduleTable();
+  renderPlanCarSelect(); renderModeGrid(); renderModeSettings(); renderPlanEstimate(); renderTimeline(); renderScheduleTable();
 }
+
+function renderTimeline() {
+  const wrap = document.getElementById("plan-timeline");
+  const section = document.getElementById("timeline-section");
+  if (!wrap || !section) return;
+  const plan = state.status.find(c => c.carId === state.selectedPlanCar)?.plan ?? [];
+  if (!plan.length) { section.style.display = "none"; return; }
+  section.style.display = "";
+
+  const now = new Date();
+  const tariffs = state.settings?.tariffs ?? {};
+
+  // Split into today and tomorrow groups
+  const todayStr = now.toDateString();
+  const groups = {};
+  plan.forEach(s => {
+    const dt = new Date(s.start);
+    const key = dt.toDateString();
+    if (!groups[key]) groups[key] = [];
+    groups[key].push({ ...s, dt });
+  });
+
+  // price range for colour intensity
+  const allEps = plan.map(s => s.ep ?? 0);
+  const minEp = Math.min(...allEps), maxEp = Math.max(...allEps);
+  const range = maxEp - minEp || 1;
+
+  const rows = Object.entries(groups).map(([dayStr, slots]) => {
+    const label = dayStr === todayStr ? "Today" : new Date(slots[0].dt).toLocaleDateString("da-DK", { weekday: "long", day: "numeric", month: "short" });
+    // hour labels (every 4 hours = 16 slots)
+    const hourLabels = `<div class="tl-labels">${slots.filter((_, i) => i % 16 === 0).map(s =>
+      `<span>${s.dt.getHours().toString().padStart(2,"0")}:00</span>`).join("")}<span style="margin-left:auto">24:00</span></div>`;
+    const slotHtml = slots.map(s => {
+      const isNow = s.dt <= now && now < new Date(s.dt.getTime() + 15*60000);
+      const intensity = (s.ep - minEp) / range; // 0 = cheapest, 1 = priciest
+      let cls = "tl-slot";
+      if (s.isPast) cls += " tl-past";
+      else if (s.charging) cls += intensity < 0.33 ? " tl-charge-cheap" : intensity > 0.66 ? " tl-charge-peak" : " tl-charge-mid";
+      else cls += " tl-idle";
+      if (isNow) cls += " tl-now";
+      const tip = `${fmtTime(s.start)} — ${s.ep?.toFixed(2)} DKK/kWh${s.charging ? " (charging)" : ""}`;
+      return `<div class="${cls}" title="${tip}"></div>`;
+    }).join("");
+    return `<div class="tl-day">
+      <div class="tl-day-label">${label}</div>
+      <div class="tl-track">${slotHtml}</div>
+      ${hourLabels}
+    </div>`;
+  }).join("");
+
+  const legend = `<div class="tl-legend">
+    <span><span class="tl-legend-dot" style="background:#4ade80"></span>Charging (cheap)</span>
+    <span><span class="tl-legend-dot" style="background:#facc15"></span>Charging (mid)</span>
+    <span><span class="tl-legend-dot" style="background:#f97316"></span>Charging (peak)</span>
+    <span><span class="tl-legend-dot" style="background:var(--gray-200)"></span>Idle</span>
+  </div>`;
+
+  wrap.innerHTML = rows + legend;
+}
+
 
 function renderPlanCarSelect() {
   const sel = document.getElementById("plan-car-select");

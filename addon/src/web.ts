@@ -100,6 +100,10 @@ export function createWebServer(controller: Controller, ha: HaClient) {
   app.get("/api/car/:carId/settings", (req, res) => res.json(getCarSettings(req.params.carId)));
   app.post("/api/car/:carId/settings", (req, res) => {
     saveCarSettings(req.params.carId, req.body);
+    // Rebuild plan immediately so the UI reflects the new settings
+    const { cars } = loadSettings();
+    const car = cars.find(c => c.id === req.params.carId);
+    if (car) controller.rebuildPlan(car);
     res.json({ ok: true });
   });
 
