@@ -504,8 +504,9 @@ function peakRateApprox(startTime) {
 
 
 function renderPlan() {
+  // Skip all heavy DOM work if Plan tab isn't visible — avoids blocking the main thread on every poll
+  if (!document.getElementById("view-plan")?.classList.contains("active")) return;
   renderPlanCarSelect(); renderModeGrid(); renderModeSettings(); renderPlanEstimate(); renderTimeline(); renderScheduleTable();
-  // Preview is loaded explicitly when settings change, not on every poll
 }
 
 function renderTimeline(overridePlan) {
@@ -705,6 +706,8 @@ function slider(key, label, value, min, max, step, unit) {
 function renderPlanEstimate() {
   const el = document.getElementById("plan-estimate");
   if (!el) return;
+  // If a preview is loaded, loadAndRenderPreview() owns this element — don't overwrite it on poll
+  if (state.previewPlan) return;
   const carStatus = state.status.find(c => c.carId === state.selectedPlanCar);
   const s = carStatus?.summary;
   if (!s) { el.innerHTML = `<div class="estimate-empty">No plan active — select a mode above.</div>`; return; }
@@ -1119,7 +1122,7 @@ document.addEventListener("DOMContentLoaded", () => {
       document.getElementById(`view-${link.dataset.view}`).classList.add("active");
       if (link.dataset.view === "history")  renderHistory();
       if (link.dataset.view === "settings") renderSettingsView();
-      if (link.dataset.view === "plan")     loadAndRenderPreview();
+      if (link.dataset.view === "plan")     { renderPlan(); loadAndRenderPreview(); }
     });
   });
 
