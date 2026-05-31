@@ -4,6 +4,8 @@ export const cardStyles = css`
   :host {
     display: block;
     font-family: var(--paper-font-body1_-_font-family, sans-serif);
+    max-width: 720px;
+    margin: 16px auto;
   }
 
   ha-card {

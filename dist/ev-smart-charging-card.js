@@ -23,6 +23,8 @@ const C=globalThis,i$1=t=>t,A=C.trustedTypes,E=A?A.createPolicy("lit-html",{crea
   :host {
     display: block;
     font-family: var(--paper-font-body1_-_font-family, sans-serif);
+    max-width: 720px;
+    margin: 16px auto;
   }
 
   ha-card {
