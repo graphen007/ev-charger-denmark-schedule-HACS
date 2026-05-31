@@ -169,8 +169,10 @@ html, body {
   border: 1px solid var(--gray-200);
   border-radius: 2px;
 }
-.status-tag.charging { color: var(--green); border-color: var(--green); }
-.status-tag.fast     { color: var(--amber); border-color: var(--amber); }
+.status-tag.charging  { color: var(--green); border-color: var(--green); }
+.status-tag.fast      { color: var(--amber); border-color: var(--amber); }
+.status-tag.armed     { color: var(--indigo); border-color: var(--indigo); }
+.status-tag.disarmed  { color: var(--gray-400); border-color: var(--gray-400); opacity: .7; }
 .soc-value {
   font-size: 3.5rem;
   font-weight: 800;

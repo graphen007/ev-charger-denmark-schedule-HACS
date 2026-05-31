@@ -55,6 +55,7 @@ export interface CarConfig {
   charge_limit_entity?: string;
   solar_power_entity?: string;
   house_consumption_entity?: string;
+  refresh_entity?: string;  // button/script to trigger a cloud data refresh
 }
 
 export interface CarSettings {

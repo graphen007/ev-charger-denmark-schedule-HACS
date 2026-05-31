@@ -32,6 +32,21 @@ export class Controller {
     this.broadcastFn?.(event, data);
   }
 
+  /** Press the car's refresh button/script entity so the integration fetches fresh data. */
+  async refreshCarData(car: CarConfig): Promise<void> {
+    if (!car.refresh_entity) return;
+    const domain = car.refresh_entity.split(".")[0];
+    const service = domain === "button" ? "press" : domain === "script" ? "turn_on" : "press";
+    try {
+      await this.ha.callService(domain, service, { entity_id: car.refresh_entity });
+      console.log(`[Controller] ${car.name}: triggered data refresh (${car.refresh_entity})`);
+      // Give the integration a moment to fetch before we read state
+      await new Promise(res => setTimeout(res, 3000));
+    } catch (e: unknown) {
+      console.warn(`[Controller] ${car.name}: refresh entity call failed — ${(e as Error).message}`);
+    }
+  }
+
   private getSoc(car: CarConfig): number {
     const s = loadSettings();
     if (car.soc_entity) {
@@ -65,7 +80,9 @@ export class Controller {
       this.priceSlots, settings, loadSettings().tariffs,
       soc, car.battery_kwh, car.charge_kw, solarSurplusKw,
     );
-    const state = this.carStates.get(car.id) ?? { plugged: false, plan: [] };
+    // Preserve existing state — only update the plan array
+    const existing = this.carStates.get(car.id);
+    const state: CarState = existing ?? { plugged: false, plan: [] };
     state.plan = plan;
     this.carStates.set(car.id, state);
     this.broadcast("plan_updated", { carId: car.id, plan });
@@ -89,7 +106,7 @@ export class Controller {
     this.carStates.set(car.id, state);
     if (this.priceSlots.length > 0) this.rebuildPlan(car);
     this.broadcast("plug_changed", { carId: car.id, plugged: true });
-    // Start charging immediately rather than waiting up to 5 min for the tick
+    // Start controlling immediately rather than waiting up to 5 min for the tick
     await this.controlCar(car, this.carStates.get(car.id)!);
   }
 
@@ -137,11 +154,10 @@ export class Controller {
     const { cars } = loadSettings();
     for (const car of cars) {
       if (!car.charging_switch) continue;
+      await this.refreshCarData(car);
       const state = this.carStates.get(car.id);
-      // If no plug entity configured, always run — we can't detect plug state
       const noPlugDetection = !car.plug_entity;
       if (!noPlugDetection && !state?.plugged) continue;
-      // Ensure state exists
       const effectiveState = state ?? { plugged: true, plan: [] };
       await this.controlCar(car, effectiveState);
     }
@@ -342,6 +358,9 @@ export class Controller {
     const car = cars.find((c) => c.id === carId);
     if (!car) return `Car ${carId} not found`;
 
+    // Refresh car data first so we read the latest SoC/plug state
+    await this.refreshCarData(car);
+
     const settings = getCarSettings(carId);
 
     // Re-read plug state from HA directly so we always have the latest value.
@@ -360,12 +379,12 @@ export class Controller {
 
     // Update carState so subsequent ticks keep running for this car
     const existing = this.carStates.get(carId);
-    const state = existing ?? { plugged: isPlugged, plan: [] };
-    if (!existing) {
-      state.plugged = isPlugged;
+    const state: CarState = existing ?? { plugged: isPlugged, plan: [] };
+    state.plugged = isPlugged;
+    if (!existing || state.plan.length === 0) {
       if (this.priceSlots.length > 0) this.rebuildPlan(car);
-      this.carStates.set(carId, state);
     }
+    this.carStates.set(carId, state);
     await this.controlCar(car, this.carStates.get(carId) ?? state);
     return `${car.name}: executed`;
   }
