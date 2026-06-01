@@ -1,5 +1,6 @@
 import { MongoClient, type Collection, type Db } from "mongodb";
 import type { ChargingSession, GlobalSettings, LastCommand } from "./settings.js";
+import type { PriceSlot } from "./priceClient.js";
 
 const MONGODB_URI = process.env.MONGODB_URI ?? "mongodb://localhost:27017";
 const DB_NAME     = "ev_charging";
@@ -12,7 +13,17 @@ export async function connectDb(): Promise<void> {
   client = new MongoClient(MONGODB_URI, { serverSelectionTimeoutMS: 5000 });
   await client.connect();
   db = client.db(DB_NAME);
+
+  // Sessions: index for fast history queries
   await db.collection("sessions").createIndex({ carId: 1, startTime: -1 });
+
+  // Prices: unique per (start, area) + TTL auto-expire after 90 days
+  await db.collection("prices").createIndex({ start: 1, area: 1 }, { unique: true });
+  await db.collection("prices").createIndex(
+    { startDate: 1 },
+    { expireAfterSeconds: 90 * 24 * 60 * 60 },
+  );
+
   console.log(`[DB] Connected to MongoDB at ${MONGODB_URI}`);
 }
 
@@ -22,6 +33,44 @@ function col<T extends object>(name: string): Collection<T> {
 }
 
 export function isDbConnected(): boolean { return db !== null; }
+
+// ---- Prices ----
+
+interface StoredPriceSlot { start: string; area: string; value: number; startDate: Date }
+
+/** Upsert a batch of price slots for a given area. Safe to call repeatedly. */
+export async function dbUpsertPriceSlots(slots: PriceSlot[], area: string): Promise<void> {
+  if (!slots.length) return;
+  const ops = slots.map(s => ({
+    updateOne: {
+      filter: { start: s.start, area },
+      update: { $set: { start: s.start, area, value: s.value, startDate: new Date(s.start) } },
+      upsert: true,
+    },
+  }));
+  await col("prices").bulkWrite(ops as Parameters<Collection["bulkWrite"]>[0]);
+}
+
+/** Load price slots for a range of local-DK date strings (YYYY-MM-DD). */
+export async function dbGetPriceSlots(area: string, fromDate: string, toDate?: string): Promise<PriceSlot[]> {
+  const filter: Record<string, unknown> = { area, start: { $gte: fromDate } };
+  if (toDate) (filter.start as Record<string, unknown>)["$lt"] = toDate + "T";
+  const docs = await col<StoredPriceSlot>("prices")
+    .find(filter, { sort: { start: 1 }, projection: { _id: 0, area: 0, startDate: 0 } })
+    .toArray();
+  return docs as PriceSlot[];
+}
+
+/** Load prices for a specific YYYY-MM-DD date (used by historical forecast). */
+export async function dbGetPricesForDate(area: string, dateStr: string): Promise<PriceSlot[]> {
+  const docs = await col<StoredPriceSlot>("prices")
+    .find(
+      { area, start: { $gte: dateStr, $lt: dateStr + "T23:59:59" } },
+      { sort: { start: 1 }, projection: { _id: 0, area: 0, startDate: 0 } },
+    )
+    .toArray();
+  return docs as PriceSlot[];
+}
 
 // ---- Sessions ----
 

@@ -1,6 +1,6 @@
 name: "EV Smart Charging Denmark"
 description: "Smart EV charging scheduler with Nord Pool prices, Danish tariffs, session history and departure planning. Cars configured in the UI — just install and go."
-version: "2.5.1"
+version: "2.5.2"
 slug: "ev_smart_charging_dk"
 init: false
 arch:

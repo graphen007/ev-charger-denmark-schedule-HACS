@@ -56,6 +56,11 @@ async function main() {
   const notifier = new Notifier(ha);
   const controller = new Controller(ha, notifier);
 
+  // Warm price cache from DB — planner has data instantly without waiting for API
+  await controller.loadPricesFromDb().catch(e =>
+    console.warn("[DB] Could not preload prices from DB:", e.message)
+  );
+
   // Wire HA state_changed → controller plug events
   ha.onStateChanged(async (entityId, newState, oldState) => {
     if (!newState || !oldState) return;

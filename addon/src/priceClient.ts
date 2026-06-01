@@ -125,20 +125,30 @@ export async function fetchPrices(
 }
 
 /** Fetch wind + CO2 forecast and 4-week historical avg for tomorrow's weekday. */
-export async function fetchForecast(area: string, entsoToken = "", eurDkkRate = 7.46): Promise<PriceForecast> {
+export async function fetchForecast(
+  area: string,
+  entsoToken = "",
+  eurDkkRate = 7.46,
+  dbQuery?: (area: string, dateStr: string) => Promise<PriceSlot[]>,
+): Promise<PriceForecast> {
   const now = new Date();
   const tomorrow = new Date(now); tomorrow.setDate(now.getDate() + 1);
   const dowTomorrow = tomorrow.getDay();
 
-  // Historical: 4 occurrences of same weekday
+  // Historical: 4 occurrences of same weekday — use DB first, fall back to API
   const historicalPrices: number[] = [];
   for (let weeksBack = 1; weeksBack <= 4; weeksBack++) {
     const d = new Date(tomorrow);
     d.setDate(d.getDate() - 7 * weeksBack);
+    const dateStr = fmtDate(d);
     try {
-      const slots = entsoToken
-        ? await fetchEntsoePrices(entsoToken, area, fmtDate(d), eurDkkRate)
-        : await fetchElprisenPrices(area, fmtDate(d));
+      let slots: PriceSlot[] = [];
+      if (dbQuery) slots = await dbQuery(area, dateStr);
+      if (slots.length < 20) {
+        slots = entsoToken
+          ? await fetchEntsoePrices(entsoToken, area, dateStr, eurDkkRate)
+          : await fetchElprisenPrices(area, dateStr);
+      }
       if (slots.length >= 20) historicalPrices.push(slots.reduce((s, p) => s + p.value, 0) / slots.length);
     } catch { /* ignore */ }
   }

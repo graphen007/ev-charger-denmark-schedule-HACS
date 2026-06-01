@@ -11,6 +11,7 @@ import {
 import { fetchForecast } from "./priceClient.js";
 import type { CarConfig } from "./planner.js";
 import { buildChargePlan } from "./planner.js";
+import { isDbConnected, dbGetPricesForDate, dbGetPriceSlots } from "./db.js";
 
 export function createWebServer(controller: Controller, ha: HaClient) {
   const app = express();
@@ -183,8 +184,27 @@ export function createWebServer(controller: Controller, ha: HaClient) {
   app.get("/api/forecast", async (_req, res) => {
     const { area, entso_e_token, eur_dkk_rate } = loadSettings();
     try {
-      const forecast = await fetchForecast(area, entso_e_token, eur_dkk_rate);
+      // Pass DB query callback — forecast uses stored historical data, avoids 4 live API calls
+      const dbQuery = isDbConnected() ? dbGetPricesForDate : undefined;
+      const forecast = await fetchForecast(area, entso_e_token, eur_dkk_rate, dbQuery);
       res.json(forecast);
+    } catch (e) {
+      res.status(500).json({ error: (e as Error).message });
+    }
+  });
+
+  // ---- Historical price data ----
+  app.get("/api/prices/history", async (req, res) => {
+    const { area } = loadSettings();
+    const queryArea = typeof req.query.area === "string" ? req.query.area : area;
+    const from = typeof req.query.from === "string" ? req.query.from : (() => {
+      const d = new Date(); d.setDate(d.getDate() - 90); return d.toISOString().slice(0, 10);
+    })();
+    const to = typeof req.query.to === "string" ? req.query.to : undefined;
+    if (!isDbConnected()) return res.status(503).json({ error: "DB not connected" });
+    try {
+      const slots = await dbGetPriceSlots(queryArea, from, to);
+      res.json(slots);
     } catch (e) {
       res.status(500).json({ error: (e as Error).message });
     }

@@ -4,10 +4,16 @@ import type { PriceSlot } from "./priceClient.js";
 import { fetchPrices } from "./priceClient.js";
 import { buildChargePlan, planSummary, type Slot, type CarConfig } from "./planner.js";
 import { loadSettings, saveCarSettings, getCarSettings, appendSession, loadLastCommands, saveLastCommand, type ChargingSession } from "./settings.js";
+import { isDbConnected, dbUpsertPriceSlots, dbGetPriceSlots } from "./db.js";
 
 /** Is the car on a DC fast charger? (power >> home AC charge rate) */
 function isFastCharger(powerW: number, chargeKw: number): boolean {
   return powerW > chargeKw * 1500;
+}
+
+/** Format a Date as YYYY-MM-DD in local time */
+function fmtDate(d: Date): string {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 
 interface CarState {
@@ -270,6 +276,21 @@ export class Controller {
     return { today, tomorrow };
   }
 
+  /** Load today + tomorrow prices from DB into memory — called at startup so the
+   *  planner has data immediately without waiting for the first API fetch. */
+  async loadPricesFromDb(): Promise<void> {
+    if (!isDbConnected()) return;
+    const { area } = loadSettings();
+    const now = new Date();
+    const todayStr    = fmtDate(now);
+    const afterTomorrow = new Date(now); afterTomorrow.setDate(now.getDate() + 2);
+    const slots = await dbGetPriceSlots(area, todayStr, fmtDate(afterTomorrow));
+    if (slots.length) {
+      this.priceSlots = slots;
+      console.log(`[Controller] Loaded ${slots.length} price slots from DB`);
+    }
+  }
+
   /** Refresh prices and rebuild all plans. */
   async refreshPrices(): Promise<void> {
     const { area, cars } = loadSettings();
@@ -295,10 +316,17 @@ export class Controller {
       this.lastPriceError = null;
       this.priceSlots = [...today, ...tomorrow];
 
+      // Persist to DB (upsert — safe to call multiple times for the same day)
+      if (isDbConnected()) {
+        const allSlots = [...today, ...tomorrow];
+        dbUpsertPriceSlots(allSlots, area).catch(e =>
+          console.warn("[DB] Failed to upsert price slots:", e.message)
+        );
+      }
+
       // Notify if tomorrow prices just arrived
       if (tomorrow.length > 0) {
         const tomorrowEps = tomorrow.map((s) => {
-          const dt = new Date(s.start);
           const ep = s.value * 1.25 + 0.21; // rough effective price for notification
           return ep;
         });
@@ -311,9 +339,7 @@ export class Controller {
         await this.notifier.priceSpike("tomorrow peak", maxEp);
       }
 
-      // Rebuild plans for all active cars:
-      // - plugged cars (detected via plug_entity)
-      // - always-on cars with no plug detection
+      // Rebuild plans for all active cars
       for (const car of cars) {
         const state = this.carStates.get(car.id);
         if (state?.plugged || !car.plug_entity) this.rebuildPlan(car);
