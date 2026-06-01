@@ -932,9 +932,8 @@ function renderChargerPicker() {
     <button class="charger-pill ${ch.id === activeId ? "active" : ""}" data-charger-id="${ch.id}">
       <span class="charger-pill-name">${ch.name}</span>
       <span class="charger-pill-kw">${ch.kw} kW</span>
-    </button>`).join("");
-  const active = chargers.find(c => c.id === activeId) ?? chargers[0];
-  el.innerHTML += `<div class="charger-active-label">Using: <strong>${active.name}</strong> · ${active.kw} kW</div>`;
+    </button>`).join("") +
+    `<div class="charger-active-label">Active: <strong>${(chargers.find(c => c.id === activeId) ?? chargers[0]).name}</strong> · ${(chargers.find(c => c.id === activeId) ?? chargers[0]).kw} kW</div>`;
   el.querySelectorAll(".charger-pill").forEach(btn => btn.addEventListener("click", async () => {
     await api("POST", `/api/car/${state.selectedPlanCar}/active-charger`, { chargerId: btn.dataset.chargerId });
     await loadStatus();

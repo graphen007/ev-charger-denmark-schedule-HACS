@@ -545,17 +545,18 @@ html, body {
   border: none;
   border-right: var(--border);
   background: var(--white);
+  color: var(--black);
   cursor: pointer;
   transition: background 0.1s;
   font-family: inherit;
   min-width: 100px;
 }
 .charger-pill:last-child { border-right: none; }
-.charger-pill:hover { background: var(--gray-50); }
-.charger-pill.active { background: var(--black); color: #fff; }
+.charger-pill:hover:not(.active) { background: var(--gray-100); }
+.charger-pill.active { background: var(--black); color: var(--white); }
 .charger-pill-name { font-size: 0.82rem; font-weight: 700; line-height: 1.2; }
-.charger-pill-kw { font-size: 0.7rem; opacity: .7; margin-top: 2px; }
-.charger-active-label { font-size: 0.72rem; color: var(--gray-500); margin-top: 0.4rem; }
+.charger-pill-kw { font-size: 0.7rem; opacity: .6; margin-top: 2px; }
+.charger-active-label { font-size: 0.72rem; color: var(--gray-500); padding: 0.35rem 0.8rem; border-top: var(--border); width: 100%; }
 
 /* ===== Charger manager (Settings) ===== */
 .charger-mgr-row {
