@@ -15,6 +15,15 @@ export interface ForecastHour {
   dataPoints: number;  // how many historical weeks contributed
 }
 
+export interface ForecastDay {
+  date: string;                    // "YYYY-MM-DD"
+  dow: number;                     // 0=Sun … 6=Sat
+  hourlyForecast: ForecastHour[];
+  weeksOfData: number;
+  historicalAvg: number | null;
+  confidence: "low" | "medium" | "high";
+}
+
 export interface PriceForecast {
   windCapacityPct: number | null;
   co2gPerKwh: number | null;
@@ -22,10 +31,11 @@ export interface PriceForecast {
   historicalStdDev: number | null;
   confidence: "low" | "medium" | "high";
   label: string;
-  // Hourly forecast for tomorrow
-  hourlyForecast: ForecastHour[];
-  forecastDate: string;   // "YYYY-MM-DD"
-  weeksOfData: number;    // how many historical weeks were available
+  // Multi-day forecast (tomorrow … +6 days)
+  days: ForecastDay[];
+  hourlyForecast: ForecastHour[];  // convenience: days[0].hourlyForecast
+  forecastDate: string;            // days[0].date
+  weeksOfData: number;             // days[0].weeksOfData
 }
 
 // ---- Area codes ----
@@ -142,24 +152,22 @@ export async function fetchPrices(
 // ---- Energinet wind/solar production forecast (free, no auth) ----
 interface WindHour { hour: string; windMW: number; solarMW: number }
 
-async function fetchWindForecast(area: string, dateStr: string): Promise<WindHour[]> {
-  // Energinet's free forecast API — DK1 or DK2 wind+solar production forecast
-  const nextDate = fmtDate(new Date(new Date(dateStr).getTime() + 86_400_000));
+/** Fetch wind+solar forecast for a date range (single API call covers all days). */
+async function fetchWindForecastRange(area: string, startDate: string, endDate: string): Promise<WindHour[]> {
   const url = `https://api.energidataservice.dk/dataset/Forecasts_5min` +
-    `?start=${encodeURIComponent(dateStr + "T00:00")}&end=${encodeURIComponent(nextDate + "T00:00")}` +
+    `?start=${encodeURIComponent(startDate + "T00:00")}&end=${encodeURIComponent(endDate + "T00:00")}` +
     `&columns=HourDK,Prognosis_Wind_Power_Offshore,Prognosis_Wind_Power_Onshore,Prognosis_Solar_Power` +
-    `&sort=HourDK,asc&limit=400`;
+    `&sort=HourDK,asc&limit=2500`;
 
-  const res = await fetch(url, { signal: AbortSignal.timeout(8000) });
+  const res = await fetch(url, { signal: AbortSignal.timeout(10_000) });
   if (!res.ok) throw new Error(`Energinet ${res.status}`);
   const json = await res.json() as { records?: Record<string, unknown>[] };
 
-  // Aggregate 5-min records into hourly averages
   const hourMap = new Map<string, { wind: number[]; solar: number[] }>();
   for (const r of (json.records ?? [])) {
     const hdk = r["HourDK"] as string | undefined;
     if (!hdk) continue;
-    const key = hdk.slice(0, 13) + ":00:00"; // "YYYY-MM-DDTHH:00:00"
+    const key = hdk.slice(0, 13) + ":00:00";
     if (!hourMap.has(key)) hourMap.set(key, { wind: [], solar: [] });
     const h = hourMap.get(key)!;
     h.wind.push((r["Prognosis_Wind_Power_Offshore"] as number ?? 0) + (r["Prognosis_Wind_Power_Onshore"] as number ?? 0));
@@ -175,12 +183,13 @@ async function fetchWindForecast(area: string, dateStr: string): Promise<WindHou
     .sort((a, b) => a.hour.localeCompare(b.hour));
 }
 
-/** Build per-hour forecast for a given date using historical prices + wind/solar data. */
+/** Build per-hour forecast for one date using historical prices + pre-fetched wind data. */
 async function buildHourlyForecast(
   area: string,
   forecastDate: string,
   entsoToken: string,
   eurDkkRate: number,
+  allWindData: WindHour[],
   dbQuery?: (area: string, dateStr: string) => Promise<PriceSlot[]>,
 ): Promise<{ forecast: ForecastHour[]; weeksOfData: number }> {
   const target = new Date(forecastDate + "T12:00:00");
@@ -215,9 +224,8 @@ async function buildHourlyForecast(
     return { avg, std, n: values.length };
   });
 
-  // Wind/solar forecast (best-effort)
-  let windData: WindHour[] = [];
-  try { windData = await fetchWindForecast(area, forecastDate); } catch { /* optional */ }
+  // Wind data for this specific date (from the pre-fetched range)
+  const windData = allWindData.filter(w => w.hour.startsWith(forecastDate));
 
   const forecast: ForecastHour[] = [];
   for (let h = 0; h < 24; h++) {
@@ -239,7 +247,7 @@ async function buildHourlyForecast(
   return { forecast, weeksOfData: historicalDays.length };
 }
 
-/** Fetch forecast: hourly price prediction + wind/solar for tomorrow. */
+/** Fetch forecast for tomorrow + 6 more days: hourly predictions + wind/solar. */
 export async function fetchForecast(
   area: string,
   entsoToken = "",
@@ -247,30 +255,60 @@ export async function fetchForecast(
   dbQuery?: (area: string, dateStr: string) => Promise<PriceSlot[]>,
 ): Promise<PriceForecast> {
   const now = new Date();
-  const tomorrow = new Date(now); tomorrow.setDate(now.getDate() + 1);
-  const forecastDate = fmtDate(tomorrow);
-  const dow = tomorrow.getDay();
+  const DAYS_AHEAD = 7;
 
-  const { forecast, weeksOfData } = await buildHourlyForecast(area, forecastDate, entsoToken, eurDkkRate, dbQuery);
+  // Build list of forecast dates (tomorrow … tomorrow+6)
+  const forecastDates = Array.from({ length: DAYS_AHEAD }, (_, i) => {
+    const d = new Date(now); d.setDate(d.getDate() + 1 + i);
+    return fmtDate(d);
+  });
 
-  const predicted = forecast.map(f => f.predicted);
-  const historicalAvg = predicted.length
-    ? predicted.reduce((a, b) => a + b, 0) / predicted.length
+  // Fetch wind/solar for the entire window in one request (best-effort)
+  let allWindData: WindHour[] = [];
+  try {
+    const endDate = fmtDate(new Date(new Date(forecastDates.at(-1)!).getTime() + 86_400_000));
+    allWindData = await fetchWindForecastRange(area, forecastDates[0], endDate);
+  } catch { /* wind optional */ }
+
+  // Build each day's forecast in parallel (DB reads are fast; API fallback is sequential per day)
+  const dayResults = await Promise.all(
+    forecastDates.map(date => buildHourlyForecast(area, date, entsoToken, eurDkkRate, allWindData, dbQuery))
+  );
+
+  const days: ForecastDay[] = forecastDates.map((date, i) => {
+    const { forecast, weeksOfData } = dayResults[i];
+    const predicted = forecast.map(f => f.predicted);
+    const avg = predicted.length ? predicted.reduce((a, b) => a + b, 0) / predicted.length : null;
+    const d = new Date(date + "T12:00:00");
+    return {
+      date,
+      dow: d.getDay(),
+      hourlyForecast: forecast,
+      weeksOfData,
+      historicalAvg: avg,
+      confidence: weeksOfData >= 4 ? "high" : weeksOfData >= 2 ? "medium" : "low",
+    };
+  });
+
+  // Backward-compat fields from tomorrow (days[0])
+  const d0 = days[0];
+  const predicted0 = d0.hourlyForecast.map(f => f.predicted);
+  const historicalAvg = d0.historicalAvg;
+  const historicalStdDev = predicted0.length > 1 && historicalAvg !== null
+    ? Math.sqrt(predicted0.reduce((s, v) => s + (v - historicalAvg) ** 2, 0) / predicted0.length)
     : null;
-  const historicalStdDev = predicted.length > 1 && historicalAvg !== null
-    ? Math.sqrt(predicted.reduce((s, v) => s + (v - historicalAvg) ** 2, 0) / predicted.length)
-    : null;
-
-  const confidence = weeksOfData >= 4 ? "high" : weeksOfData >= 2 ? "medium" : "low";
+  const dow0 = d0.dow;
   const label = historicalAvg !== null
-    ? `Forecast for ${["Sun","Mon","Tue","Wed","Thu","Fri","Sat"][dow]}: ~${historicalAvg.toFixed(2)} DKK/kWh (${weeksOfData}w data)`
+    ? `Forecast for ${["Sun","Mon","Tue","Wed","Thu","Fri","Sat"][dow0]}: ~${historicalAvg.toFixed(2)} DKK/kWh (${d0.weeksOfData}w data)`
     : "Forecast unavailable — not enough historical data yet.";
 
   return {
     windCapacityPct: null, co2gPerKwh: null,
-    historicalAvg, historicalStdDev, confidence, label,
-    hourlyForecast: forecast,
-    forecastDate,
-    weeksOfData,
+    historicalAvg, historicalStdDev,
+    confidence: d0.confidence, label,
+    days,
+    hourlyForecast: d0.hourlyForecast,
+    forecastDate: d0.date,
+    weeksOfData: d0.weeksOfData,
   };
 }

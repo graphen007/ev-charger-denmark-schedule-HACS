@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>EV Charging</title>
-  <link rel="stylesheet" href="styles.css?v=2.5.4" />
+  <link rel="stylesheet" href="styles.css?v=2.5.5" />
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.2/dist/chart.umd.min.js"></script>
 </head>
 <body>
@@ -44,9 +44,10 @@
 
         <section class="section" id="forecast-section">
           <div class="section-header">
-            <h2>Price forecast <span id="forecast-date-label" class="section-subtitle"></span></h2>
-            <div id="forecast-meta-chips" class="forecast-chips"></div>
+            <h2>Price forecast</h2>
+            <div id="forecast-day-tabs" class="forecast-day-tabs"></div>
           </div>
+          <div id="forecast-meta-chips" class="forecast-chips" style="margin-bottom:0.75rem"></div>
           <div class="chart-wrap chart-wrap-tall" id="forecast-chart-wrap">
             <canvas id="forecast-chart"></canvas>
           </div>
@@ -236,6 +237,6 @@
 
     </main>
   </div>
-  <script src="app.js?v=2.5.4"></script>
+  <script src="app.js?v=2.5.5"></script>
 </body>
 </html>
