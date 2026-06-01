@@ -260,15 +260,24 @@ function renderPriceChart() {
   const canvas = document.getElementById("price-chart");
   const wrap = canvas?.parentElement;
   if (!canvas) return;
+
   if (!state.prices.length) {
     if (priceChart) { priceChart.destroy(); priceChart = null; }
     const errMsg = state.priceError ? `<br><span style="font-size:.75rem;color:var(--red)">${state.priceError}</span>` : "";
-    wrap.innerHTML = `<div style="padding:2rem;text-align:center;color:var(--gray-400);font-size:.9rem">
+    // Keep a hidden canvas so when prices arrive the chart can be built on it
+    wrap.innerHTML = `<div id="price-no-data" style="padding:2rem;text-align:center;color:var(--gray-400);font-size:.9rem">
       No price data — check HA Nord Pool integration or Energinet API.${errMsg}
       <br><br><button class="btn" onclick="document.getElementById('btn-refresh').click()">Retry</button>
-    </div><canvas id="price-chart" style="display:none"></canvas>`;
+    </div><canvas id="price-chart"></canvas>`;
+    document.getElementById("price-chart").style.display = "none";
     return;
   }
+
+  // Always ensure canvas is visible (may have been hidden by the "no data" branch)
+  canvas.style.display = "";
+  const noData = document.getElementById("price-no-data");
+  if (noData) noData.remove();
+
   const isDark = document.documentElement.dataset.theme === "dark" ||
     (document.documentElement.dataset.theme !== "light" && window.matchMedia("(prefers-color-scheme: dark)").matches);
 
@@ -337,6 +346,18 @@ function renderPriceChart() {
     });
   });
 
+  // Fingerprint based on price data content — if unchanged, update chart in-place (no flicker)
+  const priceKey = `${state.prices.length}|${state.prices[0]?.start ?? ""}|${state.prices.at(-1)?.start ?? ""}|${isDark}`;
+  if (priceChart && priceChart._priceKey === priceKey && priceChart.data.datasets.length === datasets.length) {
+    // Only plan/SoC changed — update data without destroying the chart
+    priceChart.data.datasets[0].backgroundColor = bgColors;
+    datasets.slice(1).forEach((ds, i) => {
+      if (priceChart.data.datasets[i + 1]) priceChart.data.datasets[i + 1].data = ds.data;
+    });
+    priceChart.update("none");
+    return;
+  }
+
   if (priceChart) priceChart.destroy();
   priceChart = new Chart(canvas, {
     data: {
@@ -370,6 +391,7 @@ function renderPriceChart() {
       animation: { duration: 200 },
     },
   });
+  priceChart._priceKey = priceKey;
 }
 
 function computeEp(spot, dt, tariffs) {
