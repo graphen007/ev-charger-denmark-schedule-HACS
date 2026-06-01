@@ -116,7 +116,7 @@ export class Controller {
       const endSoc = this.getSoc(car);
       const settings = getCarSettings(car.id);
       const plan = state.plan;
-      const chargingSlots = plan.filter((s) => s.charging && !s.isPast);
+      const chargingSlots = plan.filter((s) => s.charging);
       const kwhAdded = Math.max(0, ((endSoc - state.chargingSessionStart.startSoc) / 100) * car.battery_kwh);
       const avgEp = chargingSlots.length ? chargingSlots.reduce((a, s) => a + s.ep, 0) / chargingSlots.length : 0;
       const session: ChargingSession = {
@@ -151,9 +151,12 @@ export class Controller {
   /** 5-min tick — control charging for all cars. */
   async tick(): Promise<void> {
     const { cars } = loadSettings();
-    for (const car of cars) {
-      if (!car.charging_switch) continue;
-      await this.refreshCarData(car);
+    const activeCars = cars.filter(c => !!c.charging_switch);
+
+    // Refresh all cars concurrently — don't block sequentially (each refresh sleeps 3s)
+    await Promise.all(activeCars.map(car => this.refreshCarData(car)));
+
+    for (const car of activeCars) {
       const state = this.carStates.get(car.id);
       const noPlugDetection = !car.plug_entity;
       if (!noPlugDetection && !state?.plugged) continue;
