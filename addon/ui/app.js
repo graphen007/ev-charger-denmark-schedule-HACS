@@ -56,7 +56,7 @@ let state = {
   chargerMgrCarId: null,
   previewPlan:     null,   // last fetched preview plan — shown in chart alongside active plan
   settings:        null,
-  pricePercentile: null,
+  pricePercentile: null,  // kept for future use, not displayed
 };
 
 let priceChart    = null;
@@ -160,7 +160,6 @@ function renderDashboard() {
   renderPriceChart();
   renderPriceStrip();
   renderSmartTip();
-  refreshPricePercentile();
 }
 
 function renderCarsGrid() {
@@ -609,27 +608,27 @@ function renderPriceStrip() {
   const rankClass = rank !== null ? (rank < 33 ? "cheap" : rank < 66 ? "mid" : "peak") : "";
 
   const co2 = state.status[0]?.co2gPerKwh;
-  const co2Html = co2 != null ? `<span class="chip chip-co2">🍃 ${Math.round(co2)} g/kWh</span>` : "";
-
-  const pct = state.pricePercentile;
-  const pctLabel = pct != null ? (pct <= 25 ? `🟢 Cheapest ${pct}%` : pct <= 60 ? `🟡 Mid ${pct}%` : `🔴 Expensive ${pct}%`) : "";
-  const pctHtml = pctLabel ? `<span class="chip chip-pct">${pctLabel}</span>` : "";
 
   strip.innerHTML = `
-    <div class="price-chip">
-      <span class="chip-label">Now</span>
-      <span class="chip-value ${rankClass}">${currentEp != null ? currentEp.toFixed(2) : "--"}<span class="chip-unit"> DKK</span></span>
+    <div class="price-chip price-chip-now">
+      <span class="chip-label">NOW</span>
+      <span class="chip-value ${rankClass}">${currentEp != null ? currentEp.toFixed(2) : "—"}<span class="chip-unit"> DKK</span></span>
+      ${rank !== null ? `<span class="chip-rank ${rankClass}">${rank < 33 ? "Cheap" : rank < 66 ? "Mid-range" : "Expensive"}</span>` : ""}
     </div>
-    <div class="price-chip">
-      <span class="chip-label">Lowest today</span>
-      <span class="chip-value cheap">${lo != null ? lo.toFixed(2) : "--"}<span class="chip-unit"> DKK</span></span>
+    <div class="price-chips-row">
+      <div class="price-chip price-chip-sm">
+        <span class="chip-label">Low today</span>
+        <span class="chip-value chip-sm cheap">${lo != null ? lo.toFixed(2) : "—"}<span class="chip-unit"> DKK</span></span>
+      </div>
+      <div class="price-chip price-chip-sm">
+        <span class="chip-label">High today</span>
+        <span class="chip-value chip-sm peak">${hi != null ? hi.toFixed(2) : "—"}<span class="chip-unit"> DKK</span></span>
+      </div>
+      ${co2 != null ? `<div class="price-chip price-chip-sm">
+        <span class="chip-label">CO₂</span>
+        <span class="chip-value chip-sm">${Math.round(co2)}<span class="chip-unit"> g/kWh</span></span>
+      </div>` : ""}
     </div>
-    <div class="price-chip">
-      <span class="chip-label">Highest today</span>
-      <span class="chip-value peak">${hi != null ? hi.toFixed(2) : "--"}<span class="chip-unit"> DKK</span></span>
-    </div>
-    ${rank !== null ? `<div class="price-chip"><span class="chip-label">Price rank</span><span class="chip-value ${rankClass}">${rank}%<span class="chip-unit"> of today</span></span></div>` : ""}
-    ${co2Html}${pctHtml}
   `;
 }
 
@@ -715,27 +714,6 @@ function getBestWindowTonight(carId) {
   return { startDt, endDt, avgEp, kwhNeeded: neededKwh, estCost: neededKwh * avgEp };
 }
 
-function getCurrentPriceRaw() {
-  if (!state.prices.length) return null;
-  const now = new Date();
-  const slot = state.prices.find(s => {
-    const dt = new Date(s.start);
-    return dt <= now && now < new Date(dt.getTime() + 3600000);
-  });
-  return slot?.value ?? null;
-}
-
-let _lastPercentilePrice = null;
-async function refreshPricePercentile() {
-  const nowPrice = getCurrentPriceRaw();
-  if (nowPrice == null || nowPrice === _lastPercentilePrice) return;
-  _lastPercentilePrice = nowPrice;
-  try {
-    const r = await api("GET", `/api/prices/percentile?price=${nowPrice}`);
-    state.pricePercentile = r.percentile;
-    renderPriceStrip();
-  } catch {}
-}
 
 // Approximate what a session would have cost at the peak tariff rate for that month.
 function peakRateApprox(startTime) {  const dt = new Date(startTime);

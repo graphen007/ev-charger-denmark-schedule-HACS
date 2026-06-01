@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>EV Charging</title>
-  <link rel="stylesheet" href="styles.css?v=2.6.0" />
+  <link rel="stylesheet" href="styles.css?v=2.6.1" />
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.2/dist/chart.umd.min.js"></script>
 </head>
 <body>
@@ -33,11 +33,9 @@
         <div id="cars-status-grid" class="cars-grid"></div>
 
         <section class="section">
-          <div class="section-header">
-            <h2>Price overview</h2>
-            <div class="price-strip" id="price-strip"></div>
-          </div>
-          <div class="chart-wrap">
+          <h2>Price overview</h2>
+          <div class="price-strip" id="price-strip"></div>
+          <div class="chart-wrap" style="margin-top:1.25rem">
             <canvas id="price-chart"></canvas>
           </div>
         </section>
@@ -277,6 +275,6 @@
 
     </main>
   </div>
-  <script src="app.js?v=2.6.0"></script>
+  <script src="app.js?v=2.6.1"></script>
 </body>
 </html>
