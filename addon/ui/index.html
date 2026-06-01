@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>EV Charging</title>
-  <link rel="stylesheet" href="styles.css?v=2.5.3" />
+  <link rel="stylesheet" href="styles.css?v=2.5.4" />
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.2/dist/chart.umd.min.js"></script>
 </head>
 <body>
@@ -32,11 +32,6 @@
 
         <div id="cars-status-grid" class="cars-grid"></div>
 
-        <div id="forecast-banner" class="forecast-bar" style="display:none">
-          <span id="forecast-label"></span>
-          <div id="forecast-indicators" class="forecast-chips"></div>
-        </div>
-
         <section class="section">
           <div class="section-header">
             <h2>Price overview</h2>
@@ -45,6 +40,17 @@
           <div class="chart-wrap">
             <canvas id="price-chart"></canvas>
           </div>
+        </section>
+
+        <section class="section" id="forecast-section">
+          <div class="section-header">
+            <h2>Price forecast <span id="forecast-date-label" class="section-subtitle"></span></h2>
+            <div id="forecast-meta-chips" class="forecast-chips"></div>
+          </div>
+          <div class="chart-wrap chart-wrap-tall" id="forecast-chart-wrap">
+            <canvas id="forecast-chart"></canvas>
+          </div>
+          <p id="forecast-loading" class="forecast-loading">Loading forecast…</p>
         </section>
 
         <div id="smart-actions" class="alert-bar" style="display:none">
@@ -230,6 +236,6 @@
 
     </main>
   </div>
-  <script src="app.js?v=2.5.3"></script>
+  <script src="app.js?v=2.5.4"></script>
 </body>
 </html>

@@ -48,9 +48,10 @@ let state = {
   settings:        null,
 };
 
-let priceChart   = null;
-let historyChart = null;
-let planChart    = null;
+let priceChart    = null;
+let forecastChart = null;
+let historyChart  = null;
+let planChart     = null;
 
 // ---- WebSocket ----
 function connectWs() {
@@ -127,7 +128,13 @@ async function loadPrices() {
 }
 
 async function loadForecast() {
-  try { state.forecast = await api("GET", "/api/forecast"); renderForecastBanner(); } catch {}
+  try {
+    state.forecast = await api("GET", "/api/forecast");
+    renderForecastSection();
+  } catch(e) {
+    const p = document.getElementById("forecast-loading");
+    if (p) p.textContent = "Forecast unavailable.";
+  }
 }
 
 function renderAll() {
@@ -243,17 +250,187 @@ function carColorIdx(carId) {
   return idx >= 0 ? idx % CAR_COLORS.length : 0;
 }
 
-function renderForecastBanner() {
+function renderForecastSection() {
   const f = state.forecast;
-  const banner = document.getElementById("forecast-banner");
-  if (!f || !banner) return;
-  banner.style.display = "";
-  document.getElementById("forecast-label").textContent = f.label ?? "Price forecast";
-  document.getElementById("forecast-indicators").innerHTML = [
-    f.windCapacityPct !== null ? `<span class="forecast-chip">Wind ${Math.round(f.windCapacityPct * 100)}%</span>` : "",
-    f.co2gPerKwh !== null ? `<span class="forecast-chip">${Math.round(f.co2gPerKwh)} g CO2/kWh</span>` : "",
-    f.historicalAvg !== null ? `<span class="forecast-chip">Typical ~${f.historicalAvg.toFixed(2)} DKK/kWh</span>` : "",
-  ].join("");
+  if (!f) return;
+
+  // Date label
+  const dLabel = document.getElementById("forecast-date-label");
+  if (dLabel && f.forecastDate) {
+    const d = new Date(f.forecastDate + "T12:00:00");
+    dLabel.textContent = d.toLocaleDateString("da-DK", { weekday: "long", day: "numeric", month: "long" });
+  }
+
+  // Meta chips
+  const chips = document.getElementById("forecast-meta-chips");
+  if (chips) {
+    const parts = [];
+    if (f.weeksOfData > 0)      parts.push(`<span class="forecast-chip">Based on ${f.weeksOfData}w history</span>`);
+    if (f.historicalAvg !== null) parts.push(`<span class="forecast-chip">Avg ~${f.historicalAvg.toFixed(2)} DKK/kWh</span>`);
+    const confColor = f.confidence === "high" ? "var(--green)" : f.confidence === "medium" ? "orange" : "var(--gray-400)";
+    parts.push(`<span class="forecast-chip" style="color:${confColor}">${f.confidence.charAt(0).toUpperCase() + f.confidence.slice(1)} confidence</span>`);
+    const hasWind = f.hourlyForecast?.some(h => h.windMW !== null);
+    if (hasWind) parts.push(`<span class="forecast-chip">Wind forecast ✓</span>`);
+    chips.innerHTML = parts.join("");
+  }
+
+  // Hide loading message
+  const loading = document.getElementById("forecast-loading");
+  if (loading) loading.style.display = "none";
+  const wrap = document.getElementById("forecast-chart-wrap");
+  if (wrap) wrap.style.display = "";
+
+  renderForecastChart();
+}
+
+function renderForecastChart() {
+  const canvas = document.getElementById("forecast-chart");
+  if (!canvas) return;
+  const f = state.forecast;
+  if (!f?.hourlyForecast?.length) return;
+
+  const isDark = document.documentElement.dataset.theme === "dark" ||
+    (document.documentElement.dataset.theme !== "light" && window.matchMedia("(prefers-color-scheme: dark)").matches);
+
+  const textColor  = isDark ? "#a1a1aa" : "#71717a";
+  const gridColor  = isDark ? "rgba(255,255,255,0.06)" : "rgba(0,0,0,0.05)";
+  const bandColor  = isDark ? "rgba(99,179,237,0.18)" : "rgba(59,130,246,0.12)";
+
+  const hours  = f.hourlyForecast;
+  const labels = hours.map(h => {
+    const hh = parseInt(h.hour.slice(11, 13));
+    return hh % 3 === 0 ? String(hh).padStart(2, "0") + ":00" : "";
+  });
+
+  // Color each bar by price level (green=cheap, orange=mid, red=peak)
+  const predicted = hours.map(h => parseFloat(h.predicted.toFixed(3)));
+  const lows      = hours.map(h => parseFloat(h.low.toFixed(3)));
+  const highs     = hours.map(h => parseFloat(h.high.toFixed(3)));
+  const minP = Math.min(...predicted), maxP = Math.max(...predicted);
+  const barColors = predicted.map(v => {
+    const ratio = maxP > minP ? (v - minP) / (maxP - minP) : 0.5;
+    if (ratio < 0.33) return isDark ? "rgba(52,211,153,0.85)"  : "rgba(16,185,129,0.8)";  // green
+    if (ratio < 0.66) return isDark ? "rgba(251,191,36,0.85)"  : "rgba(245,158,11,0.8)";  // amber
+    return isDark ? "rgba(248,113,113,0.85)" : "rgba(239,68,68,0.8)";                      // red
+  });
+
+  const hasWind  = hours.some(h => h.windMW  !== null);
+  const hasSolar = hours.some(h => h.solarMW !== null);
+
+  // Confidence band plugin — draws semi-transparent rectangles between low/high
+  const confidenceBandPlugin = {
+    id: "confidenceBand",
+    afterDatasetsDraw(chart) {
+      const meta = chart.getDatasetMeta(0);
+      if (!meta?.data?.length) return;
+      const ctx = chart.ctx;
+      ctx.save();
+      ctx.fillStyle = bandColor;
+      meta.data.forEach((bar, i) => {
+        const { x, width } = bar.getProps(["x", "width"], true);
+        const bw   = (width ?? 8);
+        const yLow  = chart.scales.y.getPixelForValue(lows[i]);
+        const yHigh = chart.scales.y.getPixelForValue(highs[i]);
+        ctx.fillRect(x - bw / 2, yHigh, bw, yLow - yHigh);
+      });
+      ctx.restore();
+    },
+  };
+
+  const datasets = [
+    {
+      type: "bar",
+      label: "Predicted spot (DKK/kWh)",
+      data: predicted,
+      backgroundColor: barColors,
+      borderRadius: 3,
+      borderSkipped: false,
+      yAxisID: "y",
+      order: 2,
+    },
+  ];
+
+  if (hasWind || hasSolar) {
+    const windData  = hours.map(h => h.windMW  !== null ? Math.round(h.windMW)  : null);
+    const solarData = hours.map(h => h.solarMW !== null ? Math.round(h.solarMW) : null);
+    if (hasWind) datasets.push({
+      type: "line",
+      label: "Wind (MW)",
+      data: windData,
+      borderColor: isDark ? "rgba(96,165,250,0.8)" : "rgba(59,130,246,0.7)",
+      backgroundColor: "transparent",
+      borderWidth: 1.5,
+      pointRadius: 0,
+      tension: 0.4,
+      yAxisID: "y2",
+      order: 1,
+    });
+    if (hasSolar) datasets.push({
+      type: "line",
+      label: "Solar (MW)",
+      data: solarData,
+      borderColor: isDark ? "rgba(251,191,36,0.8)" : "rgba(245,158,11,0.7)",
+      backgroundColor: "transparent",
+      borderWidth: 1.5,
+      pointRadius: 0,
+      tension: 0.4,
+      yAxisID: "y2",
+      order: 1,
+    });
+  }
+
+  if (forecastChart) forecastChart.destroy();
+  forecastChart = new Chart(canvas, {
+    plugins: [confidenceBandPlugin],
+    data: { labels, datasets },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: {
+          display: hasWind || hasSolar,
+          labels: { color: textColor, boxWidth: 12, font: { size: 11 } },
+        },
+        tooltip: {
+          callbacks: {
+            title: (items) => {
+              const h = hours[items[0].dataIndex];
+              return h.hour.slice(11, 16);
+            },
+            label: (ctx) => {
+              if (ctx.dataset.yAxisID === "y2") return `${ctx.dataset.label}: ${ctx.raw} MW`;
+              const h = hours[ctx.dataIndex];
+              const band = h.dataPoints > 1
+                ? ` (range ${h.low.toFixed(2)}–${h.high.toFixed(2)})`
+                : "";
+              return `Predicted: ${ctx.raw} DKK/kWh${band}`;
+            },
+            afterBody: (items) => {
+              const h = hours[items[0].dataIndex];
+              if (h.dataPoints < 2) return ["⚠ Based on limited data"];
+              return [];
+            },
+          },
+        },
+      },
+      scales: {
+        x:  { ticks: { color: textColor, font: { size: 10 }, maxRotation: 0 }, grid: { display: false } },
+        y:  {
+          ticks: { color: textColor, font: { size: 11 } },
+          grid:  { color: gridColor },
+          title: { display: true, text: "DKK/kWh (spot)", color: textColor, font: { size: 10 } },
+        },
+        ...(hasWind || hasSolar ? {
+          y2: {
+            position: "right",
+            ticks: { color: textColor, font: { size: 10 }, callback: v => `${v} MW` },
+            grid:  { display: false },
+          },
+        } : {}),
+      },
+      animation: { duration: 250 },
+    },
+  });
 }
 
 function renderPriceChart() {
