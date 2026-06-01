@@ -1025,22 +1025,36 @@ async function renderHistory() {
     });
   }
 
-  const totalKwh   = sessions.reduce((a, s) => a + (s.kwhAdded ?? 0), 0);
-  const totalCost  = sessions.reduce((a, s) => a + (s.estimatedCost ?? 0), 0);
-  const avgPrice   = sessions.length ? sessions.reduce((a, s) => a + (s.avgEffectivePrice ?? 0), 0) / sessions.length : 0;
-  const totalSaved = sessions.reduce((a, s) => {
+  // Determine fast-charge sessions: stored avgChargeKw > 11, or compute from time+kWh for legacy records
+  const FAST_KW = 11;
+  function sessionAvgKw(s) {
+    if (s.avgChargeKw != null) return s.avgChargeKw;
+    const dur = (new Date(s.endTime) - new Date(s.startTime)) / 3_600_000;
+    return dur > 0 ? (s.kwhAdded ?? 0) / dur : 0;
+  }
+  const acSessions   = sessions.filter(s => sessionAvgKw(s) <= FAST_KW);
+  const fastSessions = sessions.filter(s => sessionAvgKw(s) >  FAST_KW);
+
+  const totalKwh   = acSessions.reduce((a, s) => a + (s.kwhAdded ?? 0), 0);
+  const totalCost  = acSessions.reduce((a, s) => a + (s.estimatedCost ?? 0), 0);
+  const avgPrice   = acSessions.length ? acSessions.reduce((a, s) => a + (s.avgEffectivePrice ?? 0), 0) / acSessions.length : 0;
+  const totalSaved = acSessions.reduce((a, s) => {
     const peak = peakRateApprox(s.startTime);
     return a + Math.max(0, (peak - (s.avgEffectivePrice ?? peak)) * (s.kwhAdded ?? 0));
   }, 0);
+  const fastNote = fastSessions.length
+    ? `<p style="font-size:.78rem;color:var(--gray-400);margin:.25rem 0 1rem">${fastSessions.length} DC fast-charging session${fastSessions.length > 1 ? "s" : ""} excluded from statistics (avg >${FAST_KW} kW)</p>`
+    : "";
   document.getElementById("history-stats").innerHTML = `
     <div class="stat-card"><div class="stat-value">${totalKwh.toFixed(1)}</div><div class="stat-label">Total kWh</div></div>
     <div class="stat-card"><div class="stat-value">${totalCost.toFixed(0)}</div><div class="stat-label">Total DKK</div></div>
     <div class="stat-card"><div class="stat-value">${avgPrice.toFixed(2)}</div><div class="stat-label">Avg DKK/kWh</div></div>
     <div class="stat-card saved"><div class="stat-value">${totalSaved.toFixed(0)}</div><div class="stat-label">DKK saved vs peak</div></div>
-    <div class="stat-card"><div class="stat-value">${sessions.length}</div><div class="stat-label">Sessions</div></div>`;
+    <div class="stat-card"><div class="stat-value">${acSessions.length}</div><div class="stat-label">Sessions</div></div>` + fastNote;
 
+  // Monthly chart — AC only
   const monthly = {};
-  sessions.forEach(s => { const m = s.startTime?.slice(0, 7) ?? "unknown"; monthly[m] = (monthly[m] ?? 0) + (s.kwhAdded ?? 0); });
+  acSessions.forEach(s => { const m = s.startTime?.slice(0, 7) ?? "unknown"; monthly[m] = (monthly[m] ?? 0) + (s.kwhAdded ?? 0); });
   const months = Object.keys(monthly).sort().slice(-6);
   const canvas = document.getElementById("history-chart");
   if (historyChart) historyChart.destroy();
@@ -1052,19 +1066,23 @@ async function renderHistory() {
     });
   }
 
+  // Table: show all sessions, dim fast-charge rows
   document.getElementById("history-body").innerHTML = [...sessions].reverse().map(s => {
     const start = new Date(s.startTime), end = new Date(s.endTime);
     const dur = Math.round((end - start) / 60000);
     const peak = peakRateApprox(s.startTime);
     const saved = Math.max(0, (peak - (s.avgEffectivePrice ?? peak)) * (s.kwhAdded ?? 0));
-    return `<tr>
+    const avgKw = sessionAvgKw(s);
+    const isFast = avgKw > FAST_KW;
+    const fastTag = isFast ? ` <span style="font-size:.7rem;color:var(--gray-400);font-weight:400">DC ${avgKw.toFixed(0)}kW</span>` : "";
+    return `<tr style="${isFast ? "opacity:0.5" : ""}">
       <td>${start.toLocaleDateString("en-GB", { day: "numeric", month: "short" })}</td>
-      <td>${s.carName}</td>
+      <td>${s.carName}${fastTag}</td>
       <td>${Math.round(s.startSoc)}% to ${Math.round(s.endSoc)}%</td>
       <td>${s.kwhAdded?.toFixed(1)}</td>
-      <td>${s.estimatedCost?.toFixed(2)} DKK</td>
-      <td>${s.avgEffectivePrice?.toFixed(2)}</td>
-      <td class="${saved > 0.5 ? "saved-value" : ""}">${saved > 0.1 ? `${saved.toFixed(2)} DKK` : "—"}</td>
+      <td>${isFast ? "—" : (s.estimatedCost?.toFixed(2) + " DKK")}</td>
+      <td>${isFast ? "—" : s.avgEffectivePrice?.toFixed(2)}</td>
+      <td class="${saved > 0.5 ? "saved-value" : ""}">${isFast ? "—" : (saved > 0.1 ? `${saved.toFixed(2)} DKK` : "—")}</td>
       <td>${dur >= 60 ? `${Math.floor(dur/60)}h ${dur%60}m` : `${dur}m`}</td>
     </tr>`;
   }).join("") || `<tr><td colspan="8" class="empty-row">No sessions yet</td></tr>`;

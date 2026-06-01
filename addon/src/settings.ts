@@ -35,6 +35,7 @@ export interface ChargingSession {
   kwhAdded: number;
   estimatedCost: number;
   avgEffectivePrice: number;
+  avgChargeKw: number;      // kwhAdded / session hours — used to filter out fast charging (>11 kW)
   co2gPerKwh: number | null;
 }
 

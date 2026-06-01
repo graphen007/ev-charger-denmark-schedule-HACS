@@ -121,21 +121,24 @@ export class Controller {
     if (state?.chargingSessionStart) {
       const endSoc = this.getSoc(car);
       const settings = getCarSettings(car.id);
-      const plan = state.plan;
-      const chargingSlots = plan.filter((s) => s.charging);
+      const chargingSlots = state.plan.filter((s) => s.charging);
+      const endTime = new Date();
+      const durationHours = (endTime.getTime() - state.chargingSessionStart.time.getTime()) / 3_600_000;
       const kwhAdded = Math.max(0, ((endSoc - state.chargingSessionStart.startSoc) / 100) * car.battery_kwh);
       const avgEp = chargingSlots.length ? chargingSlots.reduce((a, s) => a + s.ep, 0) / chargingSlots.length : 0;
+      const avgChargeKw = durationHours > 0 ? kwhAdded / durationHours : 0;
       const session: ChargingSession = {
         id: `${car.id}_${Date.now()}`,
         carId: car.id,
         carName: car.name,
         startTime: state.chargingSessionStart.time.toISOString(),
-        endTime: new Date().toISOString(),
+        endTime: endTime.toISOString(),
         startSoc: state.chargingSessionStart.startSoc,
         endSoc,
         kwhAdded,
         estimatedCost: kwhAdded * avgEp,
         avgEffectivePrice: avgEp,
+        avgChargeKw: parseFloat(avgChargeKw.toFixed(2)),
         co2gPerKwh: null,
       };
       await appendSession(session);
