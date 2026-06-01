@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>EV Charging</title>
-  <link rel="stylesheet" href="styles.css?v=2.5.8" />
+  <link rel="stylesheet" href="styles.css?v=2.6.0" />
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.2/dist/chart.umd.min.js"></script>
 </head>
 <body>
@@ -80,6 +80,12 @@
         <section class="section" id="mode-settings-card" style="display:none">
           <h2>Settings</h2>
           <div id="mode-settings"></div>
+        </section>
+
+        <section class="section">
+          <h2>Recurring schedules</h2>
+          <p class="section-subtitle">Auto-apply target SoC and deadline when plugged in on matching days.</p>
+          <div id="recurring-schedules"></div>
         </section>
 
         <section class="section">
@@ -164,7 +170,7 @@
           <form id="charger-add-form" class="form" style="margin-top:.75rem">
             <div class="form-row" style="flex-direction:row;gap:.5rem;align-items:flex-end">
               <div style="flex:1"><label>Charger name</label><input id="cm-name" type="text" placeholder="Home wallbox" style="width:100%" /></div>
-              <div style="width:90px"><label>kW</label><input id="cm-kw" type="number" step="0.5" min="0.5" value="9.5" style="width:100%" /></div>
+              <div style="width:90px"><label>kW</label><input id="cm-kw" type="number" step="any" min="0.5" value="9.5" style="width:100%" /></div>
               <button type="submit" class="btn btn-primary" style="white-space:nowrap;align-self:flex-end">Add</button>
             </div>
           </form>
@@ -224,6 +230,19 @@
         <section class="section">
           <h2>Tariffs <span class="label-note">N1 Nettarif C incl. 25% VAT</span></h2>
           <form id="tariffs-form" class="form tariffs-grid">
+            <div class="form-row" style="column-span:all">
+              <label>Grid operator preset</label>
+              <select id="grid-preset" class="select-inline" style="width:100%">
+                <option value="">—  Select to auto-fill  —</option>
+                <option value="Radius (Sjælland)">Radius (Sjælland)</option>
+                <option value="N1 (Midt/Vestjylland)">N1 (Midt/Vestjylland)</option>
+                <option value="Konstant (Fyn)">Konstant (Fyn)</option>
+                <option value="Cerius (Sjælland N)">Cerius (Sjælland N)</option>
+                <option value="Vores Elnet (Sjælland)">Vores Elnet (Sjælland)</option>
+                <option value="Trefor/Verdo (Østjylland)">Trefor/Verdo (Østjylland)</option>
+                <option value="NRGI (Midtjylland)">NRGI (Midtjylland)</option>
+              </select>
+            </div>
             <div class="form-row"><label>Low (00-06h)</label><input class="tf" data-key="low" type="number" step="0.01" /></div>
             <div class="form-row"><label>High summer (06-17h + 21-24h, Apr-Sep)</label><input class="tf" data-key="high_summer" type="number" step="0.01" /></div>
             <div class="form-row"><label>High winter (06-17h + 21-24h, Oct-Mar)</label><input class="tf" data-key="high_winter" type="number" step="0.01" /></div>
@@ -258,6 +277,6 @@
 
     </main>
   </div>
-  <script src="app.js?v=2.5.8"></script>
+  <script src="app.js?v=2.6.0"></script>
 </body>
 </html>

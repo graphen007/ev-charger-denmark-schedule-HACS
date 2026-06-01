@@ -51,6 +51,18 @@ export async function dbUpsertPriceSlots(slots: PriceSlot[], area: string): Prom
   await col("prices").bulkWrite(ops as Parameters<Collection["bulkWrite"]>[0]);
 }
 
+/** Get raw price values for percentile calculation (last N days). */
+export async function dbGetRecentPriceValues(area: string, daysBack: number): Promise<number[]> {
+  if (!db) return [];
+  const since = new Date();
+  since.setDate(since.getDate() - daysBack);
+  const docs = await col<StoredPriceSlot>("prices").find(
+    { area, startDate: { $gte: since } },
+    { projection: { value: 1, _id: 0 } },
+  ).toArray();
+  return docs.map(d => d.value);
+}
+
 /** Load price slots for a range of local-DK date strings (YYYY-MM-DD). */
 export async function dbGetPriceSlots(area: string, fromDate: string, toDate?: string): Promise<PriceSlot[]> {
   const filter: Record<string, unknown> = { area, start: { $gte: fromDate } };

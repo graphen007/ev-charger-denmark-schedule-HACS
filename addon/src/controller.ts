@@ -27,6 +27,7 @@ export class Controller {
   private priceSlots: PriceSlot[] = [];
   private lastPriceError: string | null = null;
   private broadcastFn: ((event: string, data: unknown) => void) | null = null;
+  private co2gPerKwh: number | null = null;
 
   constructor(private ha: HaClient, private notifier: Notifier) {}
 
@@ -87,6 +88,29 @@ export class Controller {
     return plan;
   }
 
+  /** Apply the next matching recurring schedule for today (if any) */
+  private applyRecurringSchedule(car: CarConfig): void {
+    const settings = getCarSettings(car.id);
+    const schedules = settings.recurringSchedules ?? [];
+    if (!schedules.length) return;
+    const now = new Date();
+    const today = now.getDay();
+    const nowMins = now.getHours() * 60 + now.getMinutes();
+    const matching = schedules
+      .filter(s => s.days.includes(today))
+      .filter(s => { const [h, m] = s.time.split(":").map(Number); return h * 60 + m > nowMins; })
+      .sort((a, b) => {
+        const [ah, am] = a.time.split(":").map(Number);
+        const [bh, bm] = b.time.split(":").map(Number);
+        return ah * 60 + am - (bh * 60 + bm);
+      });
+    if (matching.length > 0) {
+      const next = matching[0];
+      console.log(`[Controller] ${car.name}: recurring schedule → ${next.time} @ ${next.targetSoc}%`);
+      saveCarSettings(car.id, { ...settings, deadline_time: next.time, target_soc: next.targetSoc, mode: "Cheapest Hours" });
+    }
+  }
+
   /** Called when a plug entity transitions to "on". */
   async onPlugIn(car: CarConfig): Promise<void> {
     const powerW = this.getPowerW(car);
@@ -94,6 +118,8 @@ export class Controller {
       console.log(`[Controller] ${car.name}: DC fast charger detected (${powerW}W) — hands off`);
       return;
     }
+    // Apply recurring schedule if any matches today
+    this.applyRecurringSchedule(car);
     console.log(`[Controller] ${car.name}: plugged in — resuming plan`);
     const soc = this.getSoc(car);
     // Preserve existing plan — don't wipe it on replug
@@ -139,7 +165,7 @@ export class Controller {
         estimatedCost: kwhAdded * avgEp,
         avgEffectivePrice: avgEp,
         avgChargeKw: parseFloat(avgChargeKw.toFixed(2)),
-        co2gPerKwh: null,
+        co2gPerKwh: this.co2gPerKwh,
       };
       await appendSession(session);
       if (endSoc >= (settings.charge_limit ?? 100) - 2) {
@@ -157,13 +183,31 @@ export class Controller {
     this.broadcast("plug_changed", { carId: car.id, plugged: false });
   }
 
+  /** Fetch current CO2 intensity for the given price area */
+  private async fetchCo2(area: string): Promise<void> {
+    try {
+      const url = `https://api.energidataservice.dk/dataset/CO2Emis?limit=1&sort=Minutes5DK%20DESC&filter=${encodeURIComponent(JSON.stringify({ PriceArea: area }))}`;
+      const res = await fetch(url, { signal: AbortSignal.timeout(8000) });
+      if (!res.ok) return;
+      const data = await res.json() as { records: Array<{ CO2Emission: number }> };
+      this.co2gPerKwh = data.records?.[0]?.CO2Emission ?? null;
+    } catch {
+      // non-critical, keep last known value
+    }
+  }
+
+  getCo2(): number | null { return this.co2gPerKwh; }
+
   /** 5-min tick — control charging for all cars. */
   async tick(): Promise<void> {
-    const { cars } = loadSettings();
+    const { cars, area } = loadSettings();
     const activeCars = cars.filter(c => !!c.charging_switch);
 
-    // Refresh all cars concurrently — don't block sequentially (each refresh sleeps 3s)
-    await Promise.all(activeCars.map(car => this.refreshCarData(car)));
+    // Fetch CO2 intensity in parallel with car refresh (non-blocking)
+    await Promise.all([
+      this.fetchCo2(area),
+      ...activeCars.map(car => this.refreshCarData(car)),
+    ]);
 
     for (const car of activeCars) {
       const state = this.carStates.get(car.id);
@@ -400,6 +444,7 @@ export class Controller {
         plannedAction,
         currentSlotEp: currentSlot?.ep ?? null,
         lastCommand: lastCommands[car.id] ?? null,
+        co2gPerKwh: this.co2gPerKwh,
         settings,  // include full car settings so the UI doesn't need a separate fetch
       };
     });

@@ -9,7 +9,7 @@ import { loadSettings, saveSettings, getCarSettings, saveCarSettings,
 } from "./settings.js";
 import { fetchForecast } from "./priceClient.js";
 import { buildChargePlan, getActiveChargeKw, type CarConfig, type ChargerConfig } from "./planner.js";
-import { isDbConnected, dbGetPricesForDate, dbGetPriceSlots } from "./db.js";
+import { isDbConnected, dbGetPricesForDate, dbGetPriceSlots, dbGetRecentPriceValues } from "./db.js";
 import { randomUUID } from "crypto";
 
 export function createWebServer(controller: Controller, ha: HaClient) {
@@ -270,6 +270,40 @@ export function createWebServer(controller: Controller, ha: HaClient) {
 
   // ---- History ----
   app.get("/api/history", async (_req, res) => res.json(await loadSessions()));
+
+  // ---- History CSV export ----
+  app.get("/api/history/csv", async (_req, res) => {
+    const sessions = await loadSessions();
+    const header = "id,date,car,startSoc,endSoc,kwhAdded,estimatedCost,avgPriceDKK,durationMin,avgChargeKw,fastCharge";
+    const rows = sessions.map(s => {
+      const start = new Date(s.startTime);
+      const end = new Date(s.endTime);
+      const durationMin = Math.round((end.getTime() - start.getTime()) / 60_000);
+      const isFast = (s.avgChargeKw ?? 0) > 11;
+      return [
+        s.id, start.toISOString().slice(0, 10), `"${s.carName}"`,
+        s.startSoc, s.endSoc, s.kwhAdded.toFixed(2),
+        s.estimatedCost.toFixed(2), s.avgEffectivePrice.toFixed(4),
+        durationMin, (s.avgChargeKw ?? 0).toFixed(1), isFast ? "yes" : "no",
+      ].join(",");
+    });
+    res.setHeader("Content-Type", "text/csv");
+    res.setHeader("Content-Disposition", `attachment; filename="ev-charging-${new Date().toISOString().slice(0, 10)}.csv"`);
+    res.send([header, ...rows].join("\n"));
+  });
+
+  // ---- Price percentile ----
+  app.get("/api/prices/percentile", async (req, res) => {
+    const price = parseFloat(req.query.price as string);
+    if (isNaN(price)) { res.status(400).json({ error: "price required" }); return; }
+    const { area } = loadSettings();
+    const values = await dbGetRecentPriceValues(area, 30);
+    if (values.length < 10) { res.json({ percentile: null, count: values.length }); return; }
+    const sorted = [...values].sort((a, b) => a - b);
+    const below = sorted.filter(v => v <= price).length;
+    const percentile = Math.round((below / sorted.length) * 100);
+    res.json({ percentile, count: sorted.length });
+  });
 
   // ---- Force refresh ----
   app.post("/api/refresh", async (_req, res) => {

@@ -63,6 +63,13 @@ export interface CarConfig {
   refresh_entity?: string;  // button/script to trigger a cloud data refresh
 }
 
+export interface RecurringSchedule {
+  id: string;
+  days: number[];      // 0=Sun, 1=Mon, 2=Tue, 3=Wed, 4=Thu, 5=Fri, 6=Sat
+  time: string;        // "HH:MM" departure time
+  targetSoc: number;   // 10–100
+}
+
 export interface CarSettings {
   mode: "Charge Now" | "Cheapest Hours" | "Off";
   price_threshold: number;   // kept for migration compat, unused
@@ -73,6 +80,7 @@ export interface CarSettings {
   charge_limit: number;
   manual_soc: number;
   activeChargerId?: string;  // id of selected ChargerConfig; undefined = first charger or charge_kw
+  recurringSchedules?: RecurringSchedule[];
 }
 
 /** Resolve the active charge rate for a car, considering the selected charger. */

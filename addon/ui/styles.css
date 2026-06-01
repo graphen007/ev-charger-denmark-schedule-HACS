@@ -7,7 +7,9 @@
   --gray-50: #fafafa;
   --gray-100:#f4f4f5;
   --gray-200:#e4e4e7;
+  --gray-300:#d4d4d8;
   --gray-400:#a1a1aa;
+  --gray-500:#71717a;
   --gray-600:#52525b;
   --gray-800:#27272a;
   --red:     #dc2626;
@@ -25,7 +27,9 @@
     --gray-50: #111111;
     --gray-100:#1a1a1a;
     --gray-200:#2a2a2a;
+    --gray-300:#3f3f46;
     --gray-400:#71717a;
+    --gray-500:#a1a1aa;
     --gray-600:#a1a1aa;
     --gray-800:#d4d4d8;
     --red:     #f87171;
@@ -39,7 +43,9 @@ html[data-theme="dark"] {
   --gray-50: #111111;
   --gray-100:#1a1a1a;
   --gray-200:#2a2a2a;
+  --gray-300:#3f3f46;
   --gray-400:#71717a;
+  --gray-500:#a1a1aa;
   --gray-600:#a1a1aa;
   --gray-800:#d4d4d8;
   --red:     #f87171;
@@ -255,29 +261,52 @@ html, body {
 /* ===== Mode grid ===== */
 .mode-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
-  gap: 1px;
-  border: 1px solid var(--gray-200);
-  background: var(--gray-200);
+  grid-template-columns: repeat(3, 1fr);
+  gap: 0;
+  border: 1.5px solid var(--gray-300);
+  border-radius: 0;
 }
 .mode-btn {
   background: var(--white);
-  padding: 1.1rem 1rem;
+  padding: 1.25rem 0.75rem;
   border: none;
+  border-right: 1.5px solid var(--gray-300);
   cursor: pointer;
-  text-align: left;
+  text-align: center;
+  border-radius: 0;
   transition: background 0.1s;
+  font-family: inherit;
+  width: 100%;
 }
+.mode-btn:last-child { border-right: none; }
 .mode-btn:hover   { background: var(--gray-50); }
 .mode-btn.active  { background: var(--black); color: var(--white); }
-.mode-btn-label   { display: block; font-size: 0.85rem; font-weight: 700; }
-.mode-btn-desc    { display: block; font-size: 0.72rem; color: var(--gray-400); margin-top: 2px; }
+.mode-btn-label   { display: block; font-size: 0.88rem; font-weight: 700; }
+.mode-btn-desc    { display: block; font-size: 0.71rem; color: var(--gray-400); margin-top: 3px; }
 .mode-btn.active .mode-btn-desc { color: rgba(255,255,255,0.6); }
 
 /* ===== Settings rows ===== */
-.setting-row { margin-bottom: 1.25rem; }
-.setting-row label { display: block; font-size: 0.82rem; color: var(--gray-600); margin-bottom: 4px; }
-.setting-row input[type=range] { width: 100%; accent-color: var(--black); }
+.setting-row { margin-bottom: 1.1rem; }
+.setting-row label { display: block; font-size: 0.82rem; color: var(--gray-500); margin-bottom: 5px; font-weight: 500; }
+.setting-row input[type=range] { width: 100%; accent-color: var(--black); height: 4px; cursor: pointer; }
+.setting-row input[type=number],
+.setting-row input[type=text],
+.setting-row input[type=time] {
+  width: 100%;
+  padding: 7px 10px;
+  border: 1.5px solid var(--gray-200);
+  border-radius: 0;
+  background: var(--white);
+  color: var(--black);
+  font-size: 0.9rem;
+  font-family: inherit;
+}
+.setting-row input[type=number]:focus,
+.setting-row input[type=text]:focus,
+.setting-row input[type=time]:focus {
+  outline: none;
+  border-color: var(--black);
+}
 .slider-val { color: var(--black); font-weight: 700; }
 
 /* ===== Plan estimate ===== */
@@ -548,7 +577,6 @@ html, body {
   .topbar-brand { display: none; }
   .nav-link { padding: 0 0.6rem; font-size: 0.8rem; }
   .tariffs-grid { columns: 1; }
-  .mode-grid { grid-template-columns: repeat(2, 1fr); }
   .cars-grid { grid-template-columns: 1fr; }
   .soc-value { font-size: 2.5rem; }
   .price-strip { gap: 1rem; }
@@ -676,3 +704,30 @@ html[data-theme="dark"] .charger-mgr-row { border-color: var(--gray-700); }
 @media (prefers-color-scheme: dark) {
   html:not([data-theme="light"]) .charger-mgr-row { border-color: var(--gray-700); }
 }
+
+/* ===== Charger active label ===== */
+.charger-active-label { font-size: 0.78rem; color: var(--gray-500); margin-top: .4rem; }
+
+/* ===== CO2 chip ===== */
+.chip-co2 { background: #dcfce7; color: #15803d; }
+html[data-theme="dark"] .chip-co2 { background: #14532d; color: #86efac; }
+@media (prefers-color-scheme: dark) {
+  html:not([data-theme="light"]) .chip-co2 { background: #14532d; color: #86efac; }
+}
+
+/* ===== Price percentile chip ===== */
+.chip-pct { font-size: .72rem; padding: 3px 8px; border-radius: 3px; font-weight: 600; }
+.chip-pct:not(:empty) { background: var(--gray-100); }
+
+/* ===== Recurring schedules ===== */
+.sched-row { display: flex; align-items: center; gap: .5rem; padding: .45rem 0; border-bottom: 1px solid var(--gray-100); flex-wrap: wrap; }
+.sched-row:last-child { border-bottom: none; }
+.sched-days { display: flex; gap: 2px; flex: 1; }
+.sched-day { font-size: .7rem; padding: 2px 5px; border: 1px solid var(--gray-200); color: var(--gray-400); }
+.sched-day.on { background: var(--black); color: var(--white); border-color: var(--black); }
+.sched-time { font-weight: 700; font-size: .85rem; min-width: 44px; }
+.sched-soc { font-size: .85rem; color: var(--gray-500); min-width: 36px; }
+.sched-day-picker { display: flex; gap: 4px; flex-wrap: wrap; }
+.sched-day-btn { padding: 3px 8px; font-size: .75rem; border: 1.5px solid var(--gray-200); background: var(--white); cursor: pointer; color: var(--black); font-family: inherit; border-radius: 0; }
+.sched-day-btn.active { background: var(--black); color: var(--white); border-color: var(--black); }
+.sched-add-form { margin-top: .75rem; padding-top: .75rem; border-top: 1px solid var(--gray-100); }

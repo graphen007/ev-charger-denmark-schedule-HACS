@@ -24,8 +24,17 @@ const DEFAULT_TARIFFS = {
   supplier:     0.00,
 };
 
-const TARIFF_LABELS = {
-  low:          "Low (00-06h)",
+const GRID_PRESETS = {
+  "Radius (Sjælland)":         { low: 0.2309, high_summer: 0.2309, high_winter: 0.7203, peak_summer: 0.2309, peak_winter: 1.5413, energinet: 0.2093, elafgift: 0.0, supplier: 0.0 },
+  "N1 (Midt/Vestjylland)":     { low: 0.1302, high_summer: 0.1302, high_winter: 0.3906, peak_summer: 0.1302, peak_winter: 0.8228, energinet: 0.2093, elafgift: 0.0, supplier: 0.0 },
+  "Konstant (Fyn)":            { low: 0.0849, high_summer: 0.0849, high_winter: 0.2880, peak_summer: 0.0849, peak_winter: 0.6560, energinet: 0.2093, elafgift: 0.0, supplier: 0.0 },
+  "Cerius (Sjælland N)":       { low: 0.2309, high_summer: 0.2309, high_winter: 0.7203, peak_summer: 0.2309, peak_winter: 1.5413, energinet: 0.2093, elafgift: 0.0, supplier: 0.0 },
+  "Vores Elnet (Sjælland)":    { low: 0.1512, high_summer: 0.1512, high_winter: 0.4904, peak_summer: 0.1512, peak_winter: 1.0659, energinet: 0.2093, elafgift: 0.0, supplier: 0.0 },
+  "Trefor/Verdo (Østjylland)": { low: 0.1237, high_summer: 0.1237, high_winter: 0.3944, peak_summer: 0.1237, peak_winter: 0.8455, energinet: 0.2093, elafgift: 0.0, supplier: 0.0 },
+  "NRGI (Midtjylland)":        { low: 0.1237, high_summer: 0.1237, high_winter: 0.3720, peak_summer: 0.1237, peak_winter: 0.8455, energinet: 0.2093, elafgift: 0.0, supplier: 0.0 },
+};
+
+const TARIFF_LABELS = {  low:          "Low (00-06h)",
   high_summer:  "High summer (06-17h + 21-24h, Apr-Sep)",
   high_winter:  "High winter (06-17h + 21-24h, Oct-Mar)",
   peak_summer:  "Peak summer (17-21h, Apr-Sep)",
@@ -47,6 +56,7 @@ let state = {
   chargerMgrCarId: null,
   previewPlan:     null,   // last fetched preview plan — shown in chart alongside active plan
   settings:        null,
+  pricePercentile: null,
 };
 
 let priceChart    = null;
@@ -150,6 +160,7 @@ function renderDashboard() {
   renderPriceChart();
   renderPriceStrip();
   renderSmartTip();
+  refreshPricePercentile();
 }
 
 function renderCarsGrid() {
@@ -597,6 +608,13 @@ function renderPriceStrip() {
   const rank = currentEp != null && lo != null && hi != null && hi > lo ? Math.round(((currentEp - lo) / (hi - lo)) * 100) : null;
   const rankClass = rank !== null ? (rank < 33 ? "cheap" : rank < 66 ? "mid" : "peak") : "";
 
+  const co2 = state.status[0]?.co2gPerKwh;
+  const co2Html = co2 != null ? `<span class="chip chip-co2">🍃 ${Math.round(co2)} g/kWh</span>` : "";
+
+  const pct = state.pricePercentile;
+  const pctLabel = pct != null ? (pct <= 25 ? `🟢 Cheapest ${pct}%` : pct <= 60 ? `🟡 Mid ${pct}%` : `🔴 Expensive ${pct}%`) : "";
+  const pctHtml = pctLabel ? `<span class="chip chip-pct">${pctLabel}</span>` : "";
+
   strip.innerHTML = `
     <div class="price-chip">
       <span class="chip-label">Now</span>
@@ -611,6 +629,7 @@ function renderPriceStrip() {
       <span class="chip-value peak">${hi != null ? hi.toFixed(2) : "--"}<span class="chip-unit"> DKK</span></span>
     </div>
     ${rank !== null ? `<div class="price-chip"><span class="chip-label">Price rank</span><span class="chip-value ${rankClass}">${rank}%<span class="chip-unit"> of today</span></span></div>` : ""}
+    ${co2Html}${pctHtml}
   `;
 }
 
@@ -696,9 +715,30 @@ function getBestWindowTonight(carId) {
   return { startDt, endDt, avgEp, kwhNeeded: neededKwh, estCost: neededKwh * avgEp };
 }
 
+function getCurrentPriceRaw() {
+  if (!state.prices.length) return null;
+  const now = new Date();
+  const slot = state.prices.find(s => {
+    const dt = new Date(s.start);
+    return dt <= now && now < new Date(dt.getTime() + 3600000);
+  });
+  return slot?.value ?? null;
+}
+
+let _lastPercentilePrice = null;
+async function refreshPricePercentile() {
+  const nowPrice = getCurrentPriceRaw();
+  if (nowPrice == null || nowPrice === _lastPercentilePrice) return;
+  _lastPercentilePrice = nowPrice;
+  try {
+    const r = await api("GET", `/api/prices/percentile?price=${nowPrice}`);
+    state.pricePercentile = r.percentile;
+    renderPriceStrip();
+  } catch {}
+}
+
 // Approximate what a session would have cost at the peak tariff rate for that month.
-function peakRateApprox(startTime) {
-  const dt = new Date(startTime);
+function peakRateApprox(startTime) {  const dt = new Date(startTime);
   const m = dt.getMonth() + 1;
   const isSummer = m >= 4 && m <= 9;
   const tariffs = state.settings?.tariffs ?? DEFAULT_TARIFFS;
@@ -708,10 +748,74 @@ function peakRateApprox(startTime) {
 }
 
 
+function renderRecurringSchedules() {
+  const el = document.getElementById("recurring-schedules");
+  if (!el) return;
+  const cs = state.carSettings[state.selectedPlanCar] ?? {};
+  const schedules = cs.recurringSchedules ?? [];
+
+  const listHtml = schedules.length ? schedules.map(s => `
+    <div class="sched-row" data-id="${s.id}">
+      <div class="sched-days">${DAY_NAMES.map((d, i) => `<span class="sched-day ${s.days.includes(i) ? "on" : ""}">${d}</span>`).join("")}</div>
+      <span class="sched-time">${s.time}</span>
+      <span class="sched-soc">${s.targetSoc}%</span>
+      <button class="btn btn-sm btn-danger sched-remove">×</button>
+    </div>`).join("") : `<p class="note" style="padding:.5rem 0">No recurring schedules. Add one below.</p>`;
+
+  el.innerHTML = listHtml + `
+    <form class="sched-add-form" id="sched-add-form">
+      <div class="sched-day-picker" id="sched-day-picker">
+        ${DAY_NAMES.map((d, i) => `<button type="button" class="sched-day-btn" data-day="${i}">${d}</button>`).join("")}
+      </div>
+      <div style="display:flex;gap:.5rem;align-items:flex-end;margin-top:.5rem">
+        <div style="flex:1"><label style="font-size:.78rem;color:var(--gray-500)">Departure</label><input type="time" id="sched-time" value="07:30" style="width:100%;padding:6px 8px;border:1.5px solid var(--gray-200);border-radius:0;background:var(--white);color:var(--black);font-family:inherit" /></div>
+        <div style="width:80px"><label style="font-size:.78rem;color:var(--gray-500)">Target SoC</label><input type="number" id="sched-soc" value="80" min="10" max="100" step="5" style="width:100%;padding:6px 8px;border:1.5px solid var(--gray-200);border-radius:0;background:var(--white);color:var(--black);font-family:inherit" /></div>
+        <button type="submit" class="btn btn-primary" style="white-space:nowrap;align-self:flex-end;border-radius:0">Add</button>
+      </div>
+    </form>`;
+
+  // Day toggle
+  let selectedDays = [1, 2, 3, 4, 5]; // Mon-Fri default
+  el.querySelectorAll(".sched-day-btn").forEach(btn => {
+    const d = parseInt(btn.dataset.day);
+    if (selectedDays.includes(d)) btn.classList.add("active");
+    btn.addEventListener("click", () => {
+      if (selectedDays.includes(d)) selectedDays = selectedDays.filter(x => x !== d);
+      else selectedDays.push(d);
+      btn.classList.toggle("active");
+    });
+  });
+
+  // Remove schedule
+  el.querySelectorAll(".sched-remove").forEach(btn => {
+    const row = btn.closest(".sched-row");
+    btn.addEventListener("click", async () => {
+      const id = row.dataset.id;
+      const cs2 = { ...cs, recurringSchedules: (cs.recurringSchedules ?? []).filter(s => s.id !== id) };
+      state.carSettings[state.selectedPlanCar] = cs2;
+      await api("POST", `/api/car/${state.selectedPlanCar}/settings`, cs2);
+      renderRecurringSchedules();
+    });
+  });
+
+  // Add schedule
+  el.querySelector("#sched-add-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    if (!selectedDays.length) { alert("Pick at least one day"); return; }
+    const time = document.getElementById("sched-time").value;
+    const targetSoc = parseInt(document.getElementById("sched-soc").value);
+    const newSched = { id: `${Date.now()}`, days: [...selectedDays].sort(), time, targetSoc };
+    const cs2 = { ...cs, recurringSchedules: [...(cs.recurringSchedules ?? []), newSched] };
+    state.carSettings[state.selectedPlanCar] = cs2;
+    await api("POST", `/api/car/${state.selectedPlanCar}/settings`, cs2);
+    renderRecurringSchedules();
+  });
+}
+
 function renderPlan() {
   // Skip all heavy DOM work if Plan tab isn't visible — avoids blocking the main thread on every poll
   if (!document.getElementById("view-plan")?.classList.contains("active")) return;
-  renderPlanCarSelect(); renderChargerPicker(); renderModeGrid(); renderModeSettings(); renderPlanEstimate(); renderTimeline(); renderScheduleTable();
+  renderPlanCarSelect(); renderChargerPicker(); renderModeGrid(); renderModeSettings(); renderRecurringSchedules(); renderPlanEstimate(); renderTimeline(); renderScheduleTable();
 }
 
 function renderTimeline(overridePlan) {
@@ -851,6 +955,8 @@ function renderChargerPicker() {
       <span class="charger-pill-name">${ch.name}</span>
       <span class="charger-pill-kw">${ch.kw} kW</span>
     </button>`).join("");
+  const active = chargers.find(c => c.id === activeId) ?? chargers[0];
+  el.innerHTML += `<div class="charger-active-label">Using: <strong>${active.name}</strong> · ${active.kw} kW</div>`;
   el.querySelectorAll(".charger-pill").forEach(btn => btn.addEventListener("click", async () => {
     await api("POST", `/api/car/${state.selectedPlanCar}/active-charger`, { chargerId: btn.dataset.chargerId });
     await loadStatus();
@@ -1066,6 +1172,8 @@ async function renderHistory() {
     const peak = peakRateApprox(s.startTime);
     return a + Math.max(0, (peak - (s.avgEffectivePrice ?? peak)) * (s.kwhAdded ?? 0));
   }, 0);
+  const co2Sessions = acSessions.filter(s => s.co2gPerKwh != null);
+  const co2Saved = co2Sessions.reduce((sum, s) => sum + (500 - (s.co2gPerKwh ?? 500)) * (s.kwhAdded ?? 0) / 1000, 0);
   const fastNote = fastSessions.length
     ? `<p style="font-size:.78rem;color:var(--gray-400);margin:.25rem 0 1rem">${fastSessions.length} DC fast-charging session${fastSessions.length > 1 ? "s" : ""} excluded from statistics (avg >${FAST_KW} kW)</p>`
     : "";
@@ -1074,7 +1182,14 @@ async function renderHistory() {
     <div class="stat-card"><div class="stat-value">${totalCost.toFixed(0)}</div><div class="stat-label">Total DKK</div></div>
     <div class="stat-card"><div class="stat-value">${avgPrice.toFixed(2)}</div><div class="stat-label">Avg DKK/kWh</div></div>
     <div class="stat-card saved"><div class="stat-value">${totalSaved.toFixed(0)}</div><div class="stat-label">DKK saved vs peak</div></div>
-    <div class="stat-card"><div class="stat-value">${acSessions.length}</div><div class="stat-label">Sessions</div></div>` + fastNote;
+    <div class="stat-card"><div class="stat-value">${acSessions.length}</div><div class="stat-label">Sessions</div></div>
+    ${co2Saved > 0 ? `<div class="stat-card"><div class="stat-value" style="color:var(--green)">${co2Saved.toFixed(1)}</div><div class="stat-label">kg CO₂ saved vs EU avg</div></div>` : ""}` + fastNote;
+
+  document.getElementById("history-stats").insertAdjacentHTML("afterend",
+    `<button class="btn btn-sm" id="btn-export-csv" style="margin-top:.5rem">⬇ Export CSV</button>`);
+  document.getElementById("btn-export-csv")?.addEventListener("click", () => {
+    window.location.href = `${BASE_URL}/api/history/csv`;
+  });
 
   // Monthly chart — AC only
   const monthly = {};
@@ -1362,7 +1477,7 @@ function renderChargerManagerList() {
       <span class="charger-mgr-name">${ch.name}</span>
       <span class="charger-mgr-kw">${ch.kw} kW</span>
       <input class="charger-mgr-name-input" type="text" value="${ch.name}" placeholder="Name" style="display:none;width:120px" />
-      <input class="charger-mgr-kw-input" type="number" step="0.5" min="0.5" value="${ch.kw}" style="display:none;width:70px" />
+      <input class="charger-mgr-kw-input" type="number" step="any" min="0.5" value="${ch.kw}" style="display:none;width:70px" />
       <button class="btn btn-sm charger-mgr-edit">Edit</button>
       <button class="btn btn-sm btn-danger charger-mgr-delete">Remove</button>
     </div>`).join("");
@@ -1414,6 +1529,17 @@ function renderTariffsForm() {
     }
     hint.textContent = `Default: ${DEFAULT_TARIFFS[key]}`;
   });
+  const presetSel = document.getElementById("grid-preset");
+  if (presetSel) {
+    presetSel.addEventListener("change", () => {
+      const preset = GRID_PRESETS[presetSel.value];
+      if (!preset) return;
+      Object.entries(preset).forEach(([key, val]) => {
+        const inp = document.querySelector(`.tf[data-key="${key}"]`);
+        if (inp) inp.value = val;
+      });
+    });
+  }
 }
 
 function renderNotifForm() {
