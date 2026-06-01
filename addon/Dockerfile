@@ -13,7 +13,7 @@ FROM node:20-bookworm-slim
 WORKDIR /app
 
 # Install MongoDB Community 7.0
-RUN apt-get update && apt-get install -y --no-install-recommends gnupg curl && \
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates gnupg curl && \
     curl -fsSL https://www.mongodb.org/static/pgp/server-7.0.asc \
       | gpg -o /usr/share/keyrings/mongodb-server-7.0.gpg --dearmor && \
     echo "deb [ arch=amd64,arm64 signed-by=/usr/share/keyrings/mongodb-server-7.0.gpg ] \
