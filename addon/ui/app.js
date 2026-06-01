@@ -675,9 +675,9 @@ function getBestWindowTonight(carId) {
   const tariffs = state.settings?.tariffs ?? {};
   const cs = state.carSettings[carId] ?? {};
   const carConfig  = state.settings?.cars?.find(c => c.id === carId);
-  const chargeKw   = carStatus?.activeChargeKw ?? carConfig?.charge_kw ?? 9.5;
   const batteryKwh = carConfig?.battery_kwh ?? 71.2;
   const carStatus  = state.status.find(c => c.carId === carId);
+  const chargeKw   = carStatus?.activeChargeKw ?? carConfig?.charge_kw ?? 9.5;
   const currentSoc = carStatus?.soc ?? cs.manual_soc ?? 20;
   const targetSoc  = Math.min(cs.target_soc ?? 80, cs.charge_limit ?? 100);
   const neededKwh  = Math.max(0, ((targetSoc - currentSoc) / 100) * batteryKwh);
