@@ -3,6 +3,7 @@ import { Controller } from "./controller.js";
 import { Notifier } from "./notifier.js";
 import { createWebServer } from "./web.js";
 import { loadSettings } from "./settings.js";
+import { connectDb } from "./db.js";
 
 const PORT = parseInt(process.env.PORT ?? "8099", 10);
 
@@ -41,6 +42,11 @@ async function postConnectSetup(ha: HaClient, controller: Controller) {
 
 async function main() {
   console.log("=== EV Smart Charging Denmark v2.0 ===");
+
+  // Connect to local MongoDB (started by entrypoint.sh, data at /data/mongodb)
+  connectDb().catch(err =>
+    console.warn(`[DB] MongoDB unavailable — using JSON fallback: ${err.message}`)
+  );
 
   const ha = new HaClient();
   const notifier = new Notifier(ha);

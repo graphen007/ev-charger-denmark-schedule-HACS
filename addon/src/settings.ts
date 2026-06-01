@@ -103,23 +103,27 @@ export function saveCarSettings(carId: string, cs: CarSettings): void {
   saveSettings(s);
 }
 
-// ---- Session log ----
+// ---- Session log (MongoDB) ----
+import { dbLoadSessions, dbAppendSession, isDbConnected } from "./db.js";
 
-export function loadSessions(): ChargingSession[] {
-  ensureDataDir();
+/** Load sessions — from MongoDB if connected, else legacy JSON fallback. */
+export async function loadSessions(): Promise<ChargingSession[]> {
+  if (isDbConnected()) return dbLoadSessions();
+  // Legacy JSON fallback (used if MongoDB unavailable)
   try {
     return JSON.parse(fs.readFileSync(SESSIONS_PATH, "utf8")) as ChargingSession[];
-  } catch {
-    return [];
-  }
+  } catch { return []; }
 }
 
-export function appendSession(session: ChargingSession): void {
+/** Append a session — to MongoDB if connected, else legacy JSON fallback. */
+export async function appendSession(session: ChargingSession): Promise<void> {
+  if (isDbConnected()) { await dbAppendSession(session); return; }
+  // Legacy JSON fallback
   ensureDataDir();
-  const sessions = loadSessions();
-  sessions.push(session);
-  // Keep last 500 sessions
-  const trimmed = sessions.slice(-500);
+  const existing: ChargingSession[] = (() => {
+    try { return JSON.parse(fs.readFileSync(SESSIONS_PATH, "utf8")); } catch { return []; }
+  })();
+  const trimmed = [...existing, session].slice(-500);
   fs.writeFileSync(SESSIONS_PATH, JSON.stringify(trimmed, null, 2), "utf8");
 }
 

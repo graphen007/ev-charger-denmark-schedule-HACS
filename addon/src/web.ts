@@ -191,7 +191,7 @@ export function createWebServer(controller: Controller, ha: HaClient) {
   });
 
   // ---- History ----
-  app.get("/api/history", (_req, res) => res.json(loadSessions()));
+  app.get("/api/history", async (_req, res) => res.json(await loadSessions()));
 
   // ---- Force refresh ----
   app.post("/api/refresh", async (_req, res) => {

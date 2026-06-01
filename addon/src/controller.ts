@@ -132,7 +132,7 @@ export class Controller {
         avgEffectivePrice: avgEp,
         co2gPerKwh: null,
       };
-      appendSession(session);
+      await appendSession(session);
       if (endSoc >= (settings.charge_limit ?? 100) - 2) {
         await this.notifier.chargeComplete(car.name, endSoc, kwhAdded, session.estimatedCost);
       }
