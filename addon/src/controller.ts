@@ -2,7 +2,7 @@ import type { HaClient } from "./haClient.js";
 import type { Notifier } from "./notifier.js";
 import type { PriceSlot } from "./priceClient.js";
 import { fetchPrices } from "./priceClient.js";
-import { buildChargePlan, planSummary, type Slot, type CarConfig } from "./planner.js";
+import { buildChargePlan, planSummary, getActiveChargeKw, type Slot, type CarConfig } from "./planner.js";
 import { loadSettings, saveCarSettings, getCarSettings, appendSession, loadLastCommands, saveLastCommand, type ChargingSession } from "./settings.js";
 import { isDbConnected, dbUpsertPriceSlots, dbGetPriceSlots } from "./db.js";
 
@@ -76,7 +76,7 @@ export class Controller {
     const soc = this.getSoc(car);
     const plan = buildChargePlan(
       this.priceSlots, settings, loadSettings().tariffs,
-      soc, car.battery_kwh, car.charge_kw,
+      soc, car.battery_kwh, getActiveChargeKw(car, settings),
     );
     // Preserve existing state — only update the plan array
     const existing = this.carStates.get(car.id);
@@ -90,7 +90,7 @@ export class Controller {
   /** Called when a plug entity transitions to "on". */
   async onPlugIn(car: CarConfig): Promise<void> {
     const powerW = this.getPowerW(car);
-    if (isFastCharger(powerW, car.charge_kw)) {
+    if (isFastCharger(powerW, getActiveChargeKw(car, getCarSettings(car.id)))) {
       console.log(`[Controller] ${car.name}: DC fast charger detected (${powerW}W) — hands off`);
       return;
     }
@@ -188,14 +188,13 @@ export class Controller {
    *  Charge Now / Off are one-shot actions handled by executeNow only. */
   private async controlCar(car: CarConfig, state: CarState): Promise<void> {
     const powerW = this.getPowerW(car);
+    const settings = getCarSettings(car.id);
 
     // DC fast charger bypass
-    if (isFastCharger(powerW, car.charge_kw)) {
+    if (isFastCharger(powerW, getActiveChargeKw(car, settings))) {
       console.log(`[Controller] ${car.name}: DC fast charger active — skipping`);
       return;
     }
-
-    const settings = getCarSettings(car.id);
 
     if (!car.charging_switch) {
       console.warn(`[Controller] ${car.name}: no charging_switch configured — skipping`);
@@ -374,7 +373,7 @@ export class Controller {
       const powerW = this.getPowerW(car);
       const plan = state?.plan ?? [];
       const summary = plan.length
-        ? planSummary(plan, soc, car.battery_kwh, car.charge_kw, settings.charge_limit)
+        ? planSummary(plan, soc, car.battery_kwh, getActiveChargeKw(car, settings), settings.charge_limit)
         : null;
 
       // What the plan says should be happening right now
@@ -387,9 +386,12 @@ export class Controller {
       return {
         carId: car.id,
         carName: car.name,
+        chargers: car.chargers ?? [],
+        activeChargerId: settings.activeChargerId ?? null,
+        activeChargeKw: getActiveChargeKw(car, settings),
         plugged: plugState === "on",
         isCharging: chargingState === "on",
-        isFastCharger: isFastCharger(powerW, car.charge_kw),
+        isFastCharger: isFastCharger(powerW, getActiveChargeKw(car, settings)),
         soc,
         powerW,
         mode: settings.mode,

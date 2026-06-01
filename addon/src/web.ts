@@ -4,14 +4,13 @@ import { WebSocketServer, type WebSocket as Ws } from "ws";
 import path from "path";
 import type { Controller } from "./controller.js";
 import type { HaClient } from "./haClient.js";
-import {
-  loadSettings, saveSettings, getCarSettings, saveCarSettings,
+import { loadSettings, saveSettings, getCarSettings, saveCarSettings,
   loadSessions, type GlobalSettings,
 } from "./settings.js";
 import { fetchForecast } from "./priceClient.js";
-import type { CarConfig } from "./planner.js";
-import { buildChargePlan } from "./planner.js";
+import { buildChargePlan, getActiveChargeKw, type CarConfig, type ChargerConfig } from "./planner.js";
 import { isDbConnected, dbGetPricesForDate, dbGetPriceSlots } from "./db.js";
+import { randomUUID } from "crypto";
 
 export function createWebServer(controller: Controller, ha: HaClient) {
   const app = express();
@@ -117,7 +116,66 @@ export function createWebServer(controller: Controller, ha: HaClient) {
     res.json({ ok: true });
   });
 
-  // ---- Preview plan (dry-run with current saved settings, does not apply) ----
+  // ---- Charger CRUD ----
+  app.get("/api/car/:carId/chargers", (req, res) => {
+    const { cars } = loadSettings();
+    const car = cars.find(c => c.id === req.params.carId);
+    if (!car) { res.status(404).json({ error: "Car not found" }); return; }
+    res.json(car.chargers ?? []);
+  });
+
+  app.post("/api/car/:carId/chargers", (req, res) => {
+    const settings = loadSettings();
+    const car = settings.cars.find(c => c.id === req.params.carId);
+    if (!car) { res.status(404).json({ error: "Car not found" }); return; }
+    const { name, kw } = req.body as { name: string; kw: number };
+    if (!name || !kw) { res.status(400).json({ error: "name and kw required" }); return; }
+    const newCharger: ChargerConfig = { id: randomUUID(), name, kw: Number(kw) };
+    car.chargers = [...(car.chargers ?? []), newCharger];
+    saveSettings(settings);
+    res.json(newCharger);
+  });
+
+  app.put("/api/car/:carId/chargers/:chargerId", (req, res) => {
+    const settings = loadSettings();
+    const car = settings.cars.find(c => c.id === req.params.carId);
+    if (!car) { res.status(404).json({ error: "Car not found" }); return; }
+    const idx = (car.chargers ?? []).findIndex(c => c.id === req.params.chargerId);
+    if (idx === -1) { res.status(404).json({ error: "Charger not found" }); return; }
+    const { name, kw } = req.body as { name: string; kw: number };
+    car.chargers![idx] = { ...car.chargers![idx], name, kw: Number(kw) };
+    saveSettings(settings);
+    controller.rebuildPlan(car);
+    res.json(car.chargers![idx]);
+  });
+
+  app.delete("/api/car/:carId/chargers/:chargerId", (req, res) => {
+    const settings = loadSettings();
+    const car = settings.cars.find(c => c.id === req.params.carId);
+    if (!car) { res.status(404).json({ error: "Car not found" }); return; }
+    car.chargers = (car.chargers ?? []).filter(c => c.id !== req.params.chargerId);
+    saveSettings(settings);
+    // If deleted charger was active, clear selection
+    const carSettings = getCarSettings(req.params.carId);
+    if (carSettings.activeChargerId === req.params.chargerId) {
+      saveCarSettings(req.params.carId, { ...carSettings, activeChargerId: undefined });
+    }
+    controller.rebuildPlan(car);
+    res.json({ ok: true });
+  });
+
+  // ---- Set active charger (triggers plan rebuild) ----
+  app.post("/api/car/:carId/active-charger", (req, res) => {
+    const { cars } = loadSettings();
+    const car = cars.find(c => c.id === req.params.carId);
+    if (!car) { res.status(404).json({ error: "Car not found" }); return; }
+    const { chargerId } = req.body as { chargerId: string | null };
+    const carSettings = getCarSettings(req.params.carId);
+    saveCarSettings(req.params.carId, { ...carSettings, activeChargerId: chargerId ?? undefined });
+    controller.rebuildPlan(car);
+    res.json({ ok: true, activeChargerId: chargerId });
+  });
+
   app.get("/api/car/:carId/preview-plan", (req, res) => {
     const { cars, tariffs } = loadSettings();
     const car = cars.find(c => c.id === req.params.carId);
@@ -125,7 +183,7 @@ export function createWebServer(controller: Controller, ha: HaClient) {
     const settings = getCarSettings(req.params.carId);
     const prices = controller.getPriceSlots();
     const { soc: currentSoc } = controller.getLiveCarData(car);
-    const plan = buildChargePlan(prices, settings, tariffs ?? {}, currentSoc, car.battery_kwh, car.charge_kw);
+    const plan = buildChargePlan(prices, settings, tariffs ?? {}, currentSoc, car.battery_kwh, getActiveChargeKw(car, settings));
     res.json({ plan, settings });
   });
 

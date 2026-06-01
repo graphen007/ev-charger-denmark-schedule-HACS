@@ -614,3 +614,65 @@ html[data-theme="dark"] .tl-idle   { background: var(--gray-700); }
 /* ===== Savings ===== */
 .stat-card.saved .stat-value { color: var(--green); }
 .saved-value { color: var(--green); font-weight: 600; }
+
+/* ===== Charger picker (Plan tab) ===== */
+#charger-picker {
+  display: flex;
+  flex-wrap: wrap;
+  gap: .5rem;
+}
+.charger-pill {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: .45rem .9rem;
+  border-radius: 8px;
+  border: 1.5px solid var(--gray-300);
+  background: var(--surface);
+  cursor: pointer;
+  transition: border-color .15s, background .15s, color .15s;
+  font-family: inherit;
+  min-width: 90px;
+}
+.charger-pill:hover {
+  border-color: var(--blue);
+}
+.charger-pill.active {
+  background: var(--blue);
+  border-color: var(--blue);
+  color: #fff;
+}
+.charger-pill-name {
+  font-size: .85rem;
+  font-weight: 600;
+  line-height: 1.2;
+}
+.charger-pill-kw {
+  font-size: .75rem;
+  opacity: .75;
+}
+html[data-theme="dark"] .charger-pill { border-color: var(--gray-700); }
+@media (prefers-color-scheme: dark) {
+  html:not([data-theme="light"]) .charger-pill { border-color: var(--gray-700); }
+}
+
+/* ===== Charger manager (Settings) ===== */
+.car-list-chargers {
+  font-size: .76rem;
+  color: var(--gray-400);
+  margin-top: .1rem;
+}
+.charger-mgr-row {
+  display: flex;
+  align-items: center;
+  gap: .5rem;
+  padding: .45rem 0;
+  border-bottom: 1px solid var(--gray-200);
+}
+.charger-mgr-row:last-child { border-bottom: none; }
+.charger-mgr-name { font-weight: 600; flex: 1; }
+.charger-mgr-kw { color: var(--gray-400); font-size: .85rem; min-width: 48px; }
+html[data-theme="dark"] .charger-mgr-row { border-color: var(--gray-700); }
+@media (prefers-color-scheme: dark) {
+  html:not([data-theme="light"]) .charger-mgr-row { border-color: var(--gray-700); }
+}

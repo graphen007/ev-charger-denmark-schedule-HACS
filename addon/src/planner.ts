@@ -43,11 +43,18 @@ export function effectivePrice(spotDkkPerKwh: number, localDate: Date, tariffs: 
 
 // ---- Plan types ----
 
+export interface ChargerConfig {
+  id: string;
+  name: string;   // e.g. "Home wallbox", "Schuko socket"
+  kw: number;     // charge rate in kW
+}
+
 export interface CarConfig {
   id: string;
   name: string;
   battery_kwh: number;
-  charge_kw: number;
+  charge_kw: number;          // legacy fallback — use getActiveChargeKw() instead
+  chargers?: ChargerConfig[]; // named chargers; if present, overrides charge_kw
   charging_switch: string;
   soc_entity?: string;
   plug_entity?: string;
@@ -65,6 +72,18 @@ export interface CarSettings {
   target_soc: number;
   charge_limit: number;
   manual_soc: number;
+  activeChargerId?: string;  // id of selected ChargerConfig; undefined = first charger or charge_kw
+}
+
+/** Resolve the active charge rate for a car, considering the selected charger. */
+export function getActiveChargeKw(car: CarConfig, settings: CarSettings): number {
+  if (car.chargers?.length) {
+    const charger = settings.activeChargerId
+      ? car.chargers.find(c => c.id === settings.activeChargerId)
+      : car.chargers[0];
+    if (charger) return charger.kw;
+  }
+  return car.charge_kw;
 }
 
 export const DEFAULT_CAR_SETTINGS: CarSettings = {

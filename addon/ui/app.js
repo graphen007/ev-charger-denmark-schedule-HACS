@@ -44,6 +44,7 @@ let state = {
   carSettings:     {},
   haEntities:      [],
   editingCarId:    null,
+  chargerMgrCarId: null,
   previewPlan:     null,   // last fetched preview plan — shown in chart alongside active plan
   settings:        null,
 };
@@ -505,7 +506,7 @@ function renderPriceChart() {
   state.status.forEach((car, i) => {
     const carConfig = state.settings?.cars?.find(c => c.id === car.carId);
     const batteryKwh = carConfig?.battery_kwh ?? 71.2;
-    const chargeKw   = carConfig?.charge_kw   ?? 9.5;
+    const chargeKw   = car.activeChargeKw ?? carConfig?.charge_kw ?? 9.5;
     const chargeLimit = state.carSettings[car.carId]?.charge_limit ?? 100;
     let soc = car.soc;
     if (soc == null) return;
@@ -655,7 +656,7 @@ function computeSocProjection(carStatus, planSlots) {
   if (!carStatus || carStatus.soc == null || !planSlots.length) return null;
   const carConfig = state.settings?.cars?.find(c => c.id === carStatus.carId);
   const batteryKwh = carConfig?.battery_kwh ?? 71.2;
-  const chargeKw   = carConfig?.charge_kw   ?? 9.5;
+  const chargeKw   = carStatus.activeChargeKw ?? carConfig?.charge_kw ?? 9.5;
   const chargeLimit = state.carSettings[carStatus.carId]?.charge_limit ?? 100;
   const now = new Date();
   let soc = carStatus.soc;
@@ -674,7 +675,7 @@ function getBestWindowTonight(carId) {
   const tariffs = state.settings?.tariffs ?? {};
   const cs = state.carSettings[carId] ?? {};
   const carConfig  = state.settings?.cars?.find(c => c.id === carId);
-  const chargeKw   = carConfig?.charge_kw   ?? 9.5;
+  const chargeKw   = carStatus?.activeChargeKw ?? carConfig?.charge_kw ?? 9.5;
   const batteryKwh = carConfig?.battery_kwh ?? 71.2;
   const carStatus  = state.status.find(c => c.carId === carId);
   const currentSoc = carStatus?.soc ?? cs.manual_soc ?? 20;
@@ -710,7 +711,7 @@ function peakRateApprox(startTime) {
 function renderPlan() {
   // Skip all heavy DOM work if Plan tab isn't visible — avoids blocking the main thread on every poll
   if (!document.getElementById("view-plan")?.classList.contains("active")) return;
-  renderPlanCarSelect(); renderModeGrid(); renderModeSettings(); renderPlanEstimate(); renderTimeline(); renderScheduleTable();
+  renderPlanCarSelect(); renderChargerPicker(); renderModeGrid(); renderModeSettings(); renderPlanEstimate(); renderTimeline(); renderScheduleTable();
 }
 
 function renderTimeline(overridePlan) {
@@ -835,6 +836,28 @@ function renderPlanCarSelect() {
   if (!sel) return;
   sel.innerHTML = state.status.map(c => `<option value="${c.carId}" ${c.carId === state.selectedPlanCar ? "selected" : ""}>${c.carName}</option>`).join("");
 }
+
+function renderChargerPicker() {
+  const section = document.getElementById("charger-picker-section");
+  const el = document.getElementById("charger-picker");
+  if (!section || !el) return;
+  const carStatus = state.status.find(c => c.carId === state.selectedPlanCar);
+  const chargers = carStatus?.chargers ?? [];
+  if (chargers.length === 0) { section.style.display = "none"; return; }
+  section.style.display = "";
+  const activeId = carStatus?.activeChargerId ?? chargers[0]?.id;
+  el.innerHTML = chargers.map(ch => `
+    <button class="charger-pill ${ch.id === activeId ? "active" : ""}" data-charger-id="${ch.id}">
+      <span class="charger-pill-name">${ch.name}</span>
+      <span class="charger-pill-kw">${ch.kw} kW</span>
+    </button>`).join("");
+  el.querySelectorAll(".charger-pill").forEach(btn => btn.addEventListener("click", async () => {
+    await api("POST", `/api/car/${state.selectedPlanCar}/active-charger`, { chargerId: btn.dataset.chargerId });
+    await loadStatus();
+    renderPlan(); loadAndRenderPreview();
+  }));
+}
+
 
 function renderModeGrid() {
   const grid = document.getElementById("mode-grid");
@@ -978,7 +1001,8 @@ async function loadAndRenderPreview() {
     state.previewPlan = plan;  // store so renderTimeline can merge both plans
 
     const chargingSlots = plan.filter(s => s.charging);
-    const chargeKw = state.settings?.cars?.find(c => c.id === state.selectedPlanCar)?.charge_kw ?? 0;
+    const chargeKw = state.status.find(c => c.carId === state.selectedPlanCar)?.activeChargeKw
+      ?? state.settings?.cars?.find(c => c.id === state.selectedPlanCar)?.charge_kw ?? 0;
     const totalKwh  = chargingSlots.length * 0.25 * chargeKw;
     const avgEp     = chargingSlots.length ? chargingSlots.reduce((a, s) => a + s.ep, 0) / chargingSlots.length : 0;
     const totalCost = chargingSlots.reduce((a, s) => a + s.ep * 0.25 * chargeKw, 0);
@@ -1246,8 +1270,10 @@ function renderCarsList() {
       <div class="car-list-info">
         <span class="car-list-name">${car.name}</span>
         <span class="car-list-meta">${car.battery_kwh} kWh  ${car.charge_kw} kW AC</span>
+        ${(car.chargers ?? []).length ? `<span class="car-list-chargers">${(car.chargers).map(c => `${c.name} (${c.kw} kW)`).join(" · ")}</span>` : ""}
       </div>
       <div class="car-list-actions">
+        <button class="btn btn-sm" data-chargers="${car.id}">Chargers</button>
         <button class="btn btn-sm" data-test="${car.id}">Test</button>
         <button class="btn btn-sm" data-edit="${car.id}">Edit</button>
         <button class="btn btn-sm btn-danger" data-delete="${car.id}">Remove</button>
@@ -1256,6 +1282,7 @@ function renderCarsList() {
   el.querySelectorAll("[data-edit]").forEach(btn => btn.addEventListener("click", () => openCarForm(btn.dataset.edit)));
   el.querySelectorAll("[data-delete]").forEach(btn => btn.addEventListener("click", () => deleteCar(btn.dataset.delete)));
   el.querySelectorAll("[data-test]").forEach(btn => btn.addEventListener("click", () => testCar(btn.dataset.test)));
+  el.querySelectorAll("[data-chargers]").forEach(btn => btn.addEventListener("click", () => openChargerManager(btn.dataset.chargers)));
 }
 
 function openCarForm(carId = null) {
@@ -1294,6 +1321,83 @@ async function deleteCar(carId) {
   state.settings = await api("GET", "/api/settings");
   renderCarsList(); await loadStatus();
 }
+
+// ---- Charger manager ----
+function openChargerManager(carId) {
+  state.chargerMgrCarId = carId;
+  const card = document.getElementById("charger-manager-card");
+  const car = state.settings?.cars?.find(c => c.id === carId);
+  document.getElementById("charger-manager-title").textContent = `Chargers — ${car?.name ?? carId}`;
+  card.style.display = "";
+  card.scrollIntoView({ behavior: "smooth" });
+  renderChargerManagerList();
+
+  document.getElementById("btn-close-charger-mgr").onclick = () => {
+    card.style.display = "none";
+    state.chargerMgrCarId = null;
+  };
+  document.getElementById("charger-add-form").onsubmit = async (e) => {
+    e.preventDefault();
+    const name = document.getElementById("cm-name").value.trim();
+    const kw = parseFloat(document.getElementById("cm-kw").value);
+    if (!name || !kw) return;
+    await api("POST", `/api/car/${carId}/chargers`, { name, kw });
+    state.settings = await api("GET", "/api/settings");
+    document.getElementById("cm-name").value = "";
+    renderCarsList();
+    renderChargerManagerList();
+    await loadStatus();
+  };
+}
+
+function renderChargerManagerList() {
+  const carId = state.chargerMgrCarId;
+  const el = document.getElementById("charger-manager-list");
+  if (!el || !carId) return;
+  const car = state.settings?.cars?.find(c => c.id === carId);
+  const chargers = car?.chargers ?? [];
+  if (!chargers.length) { el.innerHTML = `<p class="note">No chargers yet — add one below.</p>`; return; }
+  el.innerHTML = chargers.map(ch => `
+    <div class="charger-mgr-row" data-id="${ch.id}">
+      <span class="charger-mgr-name">${ch.name}</span>
+      <span class="charger-mgr-kw">${ch.kw} kW</span>
+      <input class="charger-mgr-name-input" type="text" value="${ch.name}" placeholder="Name" style="display:none;width:120px" />
+      <input class="charger-mgr-kw-input" type="number" step="0.5" min="0.5" value="${ch.kw}" style="display:none;width:70px" />
+      <button class="btn btn-sm charger-mgr-edit">Edit</button>
+      <button class="btn btn-sm btn-danger charger-mgr-delete">Remove</button>
+    </div>`).join("");
+
+  el.querySelectorAll(".charger-mgr-edit").forEach(btn => {
+    const row = btn.closest(".charger-mgr-row");
+    btn.addEventListener("click", async () => {
+      if (btn.dataset.saving === "1") {
+        const id = row.dataset.id;
+        const name = row.querySelector(".charger-mgr-name-input").value.trim();
+        const kw = parseFloat(row.querySelector(".charger-mgr-kw-input").value);
+        if (!name || !kw) return;
+        await api("PUT", `/api/car/${carId}/chargers/${id}`, { name, kw });
+        state.settings = await api("GET", "/api/settings");
+        renderCarsList(); renderChargerManagerList(); await loadStatus();
+      } else {
+        row.querySelector(".charger-mgr-name").style.display = "none";
+        row.querySelector(".charger-mgr-kw").style.display = "none";
+        row.querySelector(".charger-mgr-name-input").style.display = "";
+        row.querySelector(".charger-mgr-kw-input").style.display = "";
+        btn.textContent = "Save"; btn.dataset.saving = "1";
+      }
+    });
+  });
+  el.querySelectorAll(".charger-mgr-delete").forEach(btn => {
+    const row = btn.closest(".charger-mgr-row");
+    btn.addEventListener("click", async () => {
+      if (!confirm("Remove this charger?")) return;
+      await api("DELETE", `/api/car/${carId}/chargers/${row.dataset.id}`);
+      state.settings = await api("GET", "/api/settings");
+      renderCarsList(); renderChargerManagerList(); await loadStatus();
+    });
+  });
+}
+
 
 function renderTariffsForm() {
   const tariffs = state.settings?.tariffs ?? {};
